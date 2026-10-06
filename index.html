@@ -3,147 +3,415 @@
     <head>
         <meta charset="UTF-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-        <title>Gemini Web Tool Calling</title>
+        <title>TICKER - Markets Research Agent</title>
         <style>
+            :root {
+                --amber: #ffb000;
+                --muted: #b88400;
+                --dim: #8a6200;
+                --faint: #6b4c00;
+                --line: #5c4000;
+                --red: #ff4d4d;
+            }
             * {
                 box-sizing: border-box;
                 margin: 0;
                 padding: 0;
             }
             body {
-                font-family: system-ui, sans-serif;
+                background: #000;
+                color: var(--amber);
+                font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+                font-size: 14px;
                 height: 100vh;
                 display: flex;
                 justify-content: center;
-                align-items: center;
-                padding: 3rem 1rem;
+                padding: 1.5rem 1rem;
             }
             #container {
                 width: 100%;
-                max-width: 900px;
+                max-width: 960px;
                 display: flex;
                 flex-direction: column;
-                border: 1px solid #e0e0e0;
+                border: 1px solid var(--line);
             }
-            #messages {
-                overflow-y: auto;
-                padding: 2rem;
+            header {
                 display: flex;
-                flex-direction: column;
-                gap: 1.5rem;
-                min-height: 450px;
-                max-height: 70vh;
-            }
-            .msg {
-                line-height: 1.5;
-                max-width: 80%;
-            }
-            .msg.user {
-                align-self: flex-end;
-                text-align: right;
-            }
-            .msg .role {
-                font-size: 0.75rem;
-                text-transform: uppercase;
-                letter-spacing: 0.05em;
-                color: #999;
-                margin-bottom: 0.25rem;
-            }
-            .msg.loading .content {
-                color: #999;
-            }
-            #input-area {
-                display: flex;
+                align-items: center;
                 gap: 1rem;
-                padding: 1.5rem;
-                border-top: 1px solid #e0e0e0;
+                padding: 0.6rem 1rem;
+                background: var(--amber);
+                color: #000;
             }
-            #user-input {
+            header .name {
+                font-size: 1.6rem;
+                font-weight: 800;
+                letter-spacing: 0.18em;
+            }
+            header .tagline {
                 flex: 1;
-                padding: 0.75rem 0;
-                border: none;
-                border-bottom: 1px solid #e0e0e0;
-                font-size: 1rem;
-                outline: none;
+                font-size: 0.8rem;
+                font-style: italic;
+                opacity: 0.75;
+                padding-left: 1rem;
+                border-left: 1px solid rgba(0, 0, 0, 0.4);
             }
-            #user-input:focus {
-                border-bottom-color: #000;
-            }
+
+            /* Buttons: outlined by default (example queries); .solid is the amber action button */
             button {
-                padding: 0.75rem 1.5rem;
-                background: #000;
-                color: #fff;
-                border: none;
-                font-size: 0.75rem;
-                text-transform: uppercase;
-                letter-spacing: 0.05em;
+                font: inherit;
+                padding: 0.6rem 0.8rem;
+                border: 1px solid var(--line);
+                border-radius: 4px;
+                background: none;
+                color: var(--amber);
+                box-shadow: 0 2px 0 var(--line); /* raised look */
                 cursor: pointer;
             }
-            .tool {
-                font-family: ui-monospace, monospace;
-                font-size: 0.75rem;
-                color: #555;
-                background: #f5f5f5;
-                border-left: 3px solid #f59e0b;
-                padding: 0.5rem 0.75rem;
-                margin: 0.25rem 0 0.75rem;
-                white-space: pre-wrap;
-                word-break: break-word;
+            button:hover:not(:disabled) {
+                filter: brightness(1.2);
             }
-            .tool .label {
-                text-transform: uppercase;
-                letter-spacing: 0.05em;
-                color: #b45309;
+            button:active:not(:disabled) {
+                transform: translateY(2px);
+                box-shadow: 0 1px 0 var(--dim);
             }
             button:disabled {
                 opacity: 0.3;
+                cursor: not-allowed;
+            }
+            button.solid {
+                padding: 0.5rem 1.1rem;
+                border-color: var(--amber);
+                background: var(--amber);
+                color: #000;
+                font-size: 0.75rem;
+                font-weight: 700;
+                letter-spacing: 0.08em;
+                text-transform: uppercase;
+                box-shadow: 0 3px 0 var(--dim);
+            }
+            header button.solid {
+                padding: 0.35rem 0.8rem;
+                border-color: #000;
+                background: #000;
+                color: var(--amber);
+            }
+
+            #settings {
+                display: flex;
+                flex-wrap: wrap;
+                justify-content: flex-end;
+                gap: 0.4rem 1.5rem;
+                padding: 0.4rem 1rem;
+                font-size: 0.75rem;
+                color: var(--dim);
+                border-bottom: 1px solid var(--line);
+            }
+            #settings select {
+                margin-left: 0.4rem;
+                padding: 0.15rem 0.3rem;
+                font: inherit;
+                color: var(--amber);
+                background: #000;
+                border: 1px solid var(--line);
+                border-radius: 4px;
+                cursor: pointer;
+            }
+
+            #messages {
+                flex: 1;
+                overflow-y: auto;
+                padding: 1.25rem 1rem;
+                display: flex;
+                flex-direction: column;
+                gap: 1.1rem;
+            }
+            .msg {
+                max-width: 85%;
+                padding-left: 0.8rem;
+                line-height: 1.5;
+                color: #e8e8e8;
+                border-left: 3px solid var(--amber);
+            }
+            .msg,
+            details.tool pre {
+                white-space: pre-wrap;
+                word-break: break-word;
+            }
+            .msg .role {
+                margin-bottom: 0.25rem;
+                font-size: 0.65rem;
+                font-weight: 700;
+                letter-spacing: 0.15em;
+                color: var(--amber);
+            }
+            .msg.user {
+                align-self: flex-end;
+                padding: 0 0.8rem 0 0;
+                color: #fff;
+                text-align: right;
+                border-left: none;
+                border-right: 3px solid #fff;
+            }
+            .msg.user .role {
+                color: #fff;
+            }
+            .msg.loading .content {
+                color: var(--dim);
+            }
+            .msg b {
+                color: var(--amber);
+            }
+            .up {
+                color: #00d26a;
+            }
+            .down {
+                color: var(--red);
+            }
+
+            .intro {
+                color: var(--muted);
+                line-height: 1.6;
+            }
+            .intro button {
+                display: block;
+                width: 100%;
+                margin-top: 0.5rem;
+                text-align: left;
+                font-size: 0.85rem;
+            }
+            .intro button::before {
+                content: "› ";
+                font-weight: 700;
+            }
+            .intro button:hover {
+                background: #1a1200;
+            }
+
+            details.tool,
+            div.run {
+                padding: 0.4rem 0.75rem;
+                font-size: 0.75rem;
+                color: var(--dim);
+                background: #0d0900;
+                border: 1px solid var(--line);
+                border-left: 3px solid var(--amber);
+            }
+            details.tool summary {
+                cursor: pointer;
+                color: var(--amber);
+            }
+            details.tool summary:hover {
+                color: #fff;
+            }
+            details.tool summary b,
+            div.run b {
+                margin-right: 0.6rem;
+                letter-spacing: 0.1em;
+                color: var(--dim);
+            }
+            div.run {
+                color: var(--amber);
+            }
+            div.run b:not(:first-child) {
+                margin-left: 1.5rem;
+            }
+            div.run.limit,
+            div.run.limit b {
+                color: var(--red);
+            }
+            div.run.limit {
+                border-left-color: var(--red);
+            }
+            details.tool summary::after {
+                content: "click to show result";
+                float: right;
+                font-style: italic;
+                color: var(--dim);
+            }
+            details.tool[open] summary::after {
+                content: "click to hide result";
+            }
+            details.tool pre {
+                margin-top: 0.4rem;
+                color: #b8b8b8;
+            }
+            img.chart {
+                width: 100%;
+                max-width: 720px;
+                aspect-ratio: 720 / 300;
+                border: 1px solid var(--line);
+            }
+
+            #input-area {
+                display: flex;
+                gap: 0.75rem;
+                align-items: center;
+                padding: 0.75rem 1rem;
+                border-top: 1px solid var(--line);
+            }
+            #input-area::before {
+                content: ">";
+                font-weight: 700;
+            }
+            #user-input {
+                flex: 1;
+                padding: 0.4rem 0;
+                background: none;
+                border: none;
+                outline: none;
+                color: #fff;
+                font: inherit;
+            }
+            #user-input::placeholder {
+                color: var(--faint);
+            }
+            footer {
+                padding: 0.4rem 1rem;
+                font-size: 0.7rem;
+                font-style: italic;
+                color: var(--faint);
+                border-top: 1px solid var(--line);
             }
         </style>
     </head>
     <body>
         <div id="container">
+            <header>
+                <span class="name">TICKER</span>
+                <span class="tagline">AI research agent for stocks, options, news and filings</span>
+                <button class="solid" id="new-btn">New session</button>
+            </header>
+            <div id="settings">
+                <label>Model <select id="model"></select></label>
+                <label title="Most tools the agent may call per question. It then answers with what it has.">Tool call limit <select id="limit"></select></label>
+            </div>
             <div id="messages"></div>
             <div id="input-area">
-                <input
-                    type="text"
-                    id="user-input"
-                    placeholder="Type a message..."
-                    autocomplete="off"
-                />
-                <button id="send-btn">Send</button>
+                <input type="text" id="user-input" placeholder="Ask about a stock, its options, news or SEC filings..." autocomplete="off" />
+                <button class="solid" id="send-btn">Send</button>
             </div>
+            <footer>Research only, not investment advice. Prices and options ~15 min delayed; news and SEC filings same day.</footer>
         </div>
         <script>
             const messages = document.getElementById("messages");
             const userInput = document.getElementById("user-input");
             const sendBtn = document.getElementById("send-btn");
+            const modelSelect = document.getElementById("model");
+            const limitSelect = document.getElementById("limit");
             let sessionId = null;
 
-            function addMessage(role, text, isLoading = false) {
-                const div = document.createElement("div");
-                div.className =
-                    "msg " +
-                    (role === "you" ? "user" : "assistant") +
-                    (isLoading ? " loading" : "");
-                div.innerHTML =
-                    '<div class="role">' +
-                    role +
-                    '</div><div class="content">' +
-                    text +
-                    "</div>";
-                messages.appendChild(div);
-                messages.scrollTop = messages.scrollHeight;
-                return div;
+            const EXAMPLES = [
+                "What's NVDA trading at, and what is the options market implying for its next-expiry move?",
+                "TSLA jumped on October 2. What happened?",
+                "Chart AAPL's price over the last 6 months.",
+            ];
+
+            // Create an element with an optional class and text. textContent keeps model output from being parsed as HTML.
+            function make(tag, className = "", text = "") {
+                const node = document.createElement(tag);
+                node.className = className;
+                node.textContent = text;
+                return node;
             }
 
-            async function send() {
-                const text = userInput.value.trim();
-                if (!text) return;
+            // The models and the limit range come from the server, so they are defined in one place (app.py).
+            async function loadConfig() {
+                try {
+                    const config = await (await fetch("/config")).json();
+                    for (const name of config.models) modelSelect.append(new Option(name, name));
+                    modelSelect.value = config.default_model;
+                    for (let n = 1; n <= config.max_tool_calls; n++) limitSelect.append(new Option(n, n));
+                    limitSelect.value = config.default_tool_calls;
+                } catch (e) {} // without it the chat still works, with the server's defaults
+            }
+
+            function showIntro() {
+                const intro = make(
+                    "div",
+                    "intro",
+                    "Ticker pulls live market data with tools and shows every call it makes. " +
+                        "Covers US stocks, ETFs, indices, listed options, news headlines and SEC filings. Try:",
+                );
+                for (const q of EXAMPLES) {
+                    const button = make("button", "", q);
+                    button.addEventListener("click", () => send(q));
+                    intro.append(button);
+                }
+                messages.replaceChildren(intro);
+            }
+
+            // Signed numbers like +3.95%, -$7.05 or −2: green if +, red if -. Not dates (2026-10-05), ranges (10-20%) or ±.
+            const SIGNED = /((?<![\w.])[+\-−]\$?\d[\d,]*(?:\.\d+)?%?)/;
+
+            function colorize(node, text) {
+                text.split(SIGNED).forEach((part, i) => node.append(i % 2 ? make("span", part[0] === "+" ? "up" : "down", part) : part));
+            }
+
+            // Show **bold** and colour signed numbers; drop *italic* markers and turn "* " bullets into "• ".
+            function renderText(node, text) {
+                text = text.replace(/^\s*[*-] /gm, "• ").replace(/(?<!\*)\*([^*\n]+)\*(?!\*)/g, "$1");
+                text.split(/(\*\*[^*]+\*\*)/).forEach((part, i) => {
+                    if (i % 2) {
+                        const bold = make("b");
+                        colorize(bold, part.slice(2, -2));
+                        node.append(bold);
+                    } else colorize(node, part);
+                });
+            }
+
+            function addMessage(role, text, isLoading = false) {
+                const message = make("div", "msg " + role + (isLoading ? " loading" : ""));
+                const content = make("div", "content");
+                renderText(content, text);
+                message.append(make("div", "role", role === "user" ? "YOU" : "TICKER"), content);
+                messages.append(message);
+                messages.scrollTop = messages.scrollHeight;
+                return message;
+            }
+
+            // Which model and tool call limit produced this answer, and how many calls it used
+            function addRun(model, limit, used, before) {
+                const row = make("div", "run");
+                row.append(make("b", "", "MODEL"), model, make("b", "", "TOOL CALL LIMIT"), `${limit} (${used} used)`);
+                messages.insertBefore(row, before);
+            }
+
+            // Shown in red when the agent used its whole tool call limit and had to answer without more calls
+            function addLimitNotice(limit, before) {
+                const row = make("div", "run limit");
+                row.append(make("b", "", "TOOL CALL LIMIT REACHED"), `all ${limit} call${Number(limit) === 1 ? "" : "s"} used, so the answer uses what was fetched`);
+                messages.insertBefore(row, before);
+            }
+
+            // One collapsible line per tool call the harness ran, shown above the answer
+            function addToolCall(call, before) {
+                const { chart_svg, ...result } = JSON.parse(call.result); // the chart is drawn below, not shown as JSON
+                const args = Object.entries(call.args).map(([k, v]) => k + "=" + JSON.stringify(v)).join(", ");
+                const summary = make("summary");
+                summary.append(make("b", "", "TOOL CALL"), call.name + "(" + args + ")");
+                const details = make("details", "tool");
+                details.append(summary, make("pre", "", JSON.stringify(result, null, 2)));
+                messages.insertBefore(details, before);
+                if (chart_svg) {
+                    const chart = make("img", "chart"); // an <img> never runs scripts, so the SVG is safe to show
+                    chart.alt = "Price chart";
+                    chart.src = "data:image/svg+xml;charset=utf-8," + encodeURIComponent(chart_svg);
+                    messages.insertBefore(chart, before);
+                }
+            }
+
+            async function send(forcedText) {
+                const text = (forcedText || userInput.value).trim();
+                if (!text || sendBtn.disabled) return;
 
                 userInput.value = "";
                 sendBtn.disabled = true;
-                addMessage("you", text);
-                const loading = addMessage("assistant", "Thinking...", true);
+                if (messages.querySelector(".intro")) messages.replaceChildren();
+                addMessage("user", text);
+                const loading = addMessage("assistant", "Fetching data...", true);
+                const content = loading.querySelector(".content");
+                const model = modelSelect.value, limit = limitSelect.value; // what this question is sent with
 
                 try {
                     const res = await fetch("/chat", {
@@ -152,42 +420,39 @@
                         body: JSON.stringify({
                             message: text,
                             session_id: sessionId,
+                            model: model || undefined,
+                            tool_call_limit: Number(limit) || undefined,
                         }),
                     });
                     const data = await res.json();
+                    if (!res.ok) throw new Error(typeof data.detail === "string" ? data.detail : "the server returned " + res.status);
                     sessionId = data.session_id;
-
-                    // Show each tool the harness ran, above the assistant's answer
-                    for (const call of data.tool_calls || []) {
-                        const div = document.createElement("div");
-                        div.className = "tool";
-                        const label = document.createElement("span");
-                        label.className = "label";
-                        label.textContent = "tool call  ";
-                        div.appendChild(label);
-                        div.appendChild(
-                            document.createTextNode(
-                                call.name + "(" + JSON.stringify(call.args) + ")\n→ " + call.result,
-                            ),
-                        );
-                        messages.insertBefore(div, loading);
-                    }
-                    loading.querySelector(".content").textContent =
-                        data.response;
-                    loading.classList.remove("loading");
+                    if (model) addRun(model, limit, data.tool_calls.length, loading);
+                    for (const call of data.tool_calls) addToolCall(call, loading);
+                    if (Number(limit) && data.tool_calls.length >= Number(limit)) addLimitNotice(limit, loading);
+                    content.replaceChildren();
+                    renderText(content, data.response);
                 } catch (e) {
-                    loading.querySelector(".content").textContent =
-                        "Error: " + e.message;
-                    loading.classList.remove("loading");
+                    content.textContent = "Error: " + e.message;
                 }
+                loading.classList.remove("loading");
                 sendBtn.disabled = false;
+                userInput.focus();
+                messages.scrollTop = messages.scrollHeight;
+            }
+
+            async function newSession() {
+                if (sessionId) await fetch("/clear?session_id=" + sessionId, { method: "POST" });
+                sessionId = null;
+                showIntro();
                 userInput.focus();
             }
 
-            sendBtn.addEventListener("click", send);
-            userInput.addEventListener("keydown", function (e) {
-                if (e.key === "Enter") send();
-            });
+            sendBtn.addEventListener("click", () => send());
+            userInput.addEventListener("keydown", (e) => e.key === "Enter" && send());
+            document.getElementById("new-btn").addEventListener("click", newSession);
+            loadConfig();
+            showIntro();
             userInput.focus();
         </script>
     </body>

@@ -851,7 +851,7 @@ wheels = [
 ]
 
 [[package]]
-name = "gemini-web-tool-calling"
+name = "ticker-agent"
 version = "0.1.0"
 source = { virtual = "." }
 dependencies = [
