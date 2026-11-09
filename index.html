@@ -3,15 +3,33 @@
     <head>
         <meta charset="UTF-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+        <meta name="theme-color" content="#000000" />
         <title>TICKER - Markets Research Agent</title>
         <style>
             :root {
                 --amber: #ffb000;
                 --muted: #b88400;
-                --dim: #8a6200;
-                --faint: #6b4c00;
+                --dim: #a97500; /* 5.2:1 on black */
+                --faint: #9c6b00; /* 4.5:1 on black */
+                --shade: #8a6200; /* the raised edge under buttons; not text */
                 --line: #5c4000;
                 --red: #ff4d4d;
+                --green: #00d26a;
+                --hover: #1a1200; /* the highlight under a hovered row or button */
+                --panel: #0d0900; /* tool-call rows */
+                --glow: rgba(255, 176, 0, 0.18);
+                --tip-delay: 0.5s; /* every tooltip waits this long under the pointer */
+                /* Background: tune here. Pick the look with ?bg=twinkle (default) or ?bg=none in the URL */
+                --dot-opacity: 0.25; /* the static dots, 0 to 1 */
+                --dot-size: 1px; /* radius of each dot */
+                --dot-gap: 24px; /* spacing between dots */
+                --dot-fade-start: 25%; /* dots are full strength inside this radius... */
+                --dot-fade-end: 75%; /* ...and fade to nothing at this one */
+                --dot-mask: radial-gradient(ellipse at 50% 35%, #000 var(--dot-fade-start), transparent var(--dot-fade-end));
+                --twinkle-density: 0.05; /* share of the visible dots that twinkle */
+                --twinkle-speed: 10s; /* typical time between one dot's flashes (the Normal setting) */
+                --tape-speed: 120s; /* time for one full scroll of the tape (the Normal setting) */
+                --twinkle-peak: 0.75; /* how bright a twinkling dot gets, 0 to 1 */
             }
             * {
                 box-sizing: border-box;
@@ -19,11 +37,14 @@
                 padding: 0;
             }
             body {
-                background: #000;
+                background: radial-gradient(ellipse at 50% -10%, rgba(255, 176, 0, 0.115), transparent 55%), #000;
                 color: var(--amber);
                 font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
                 font-size: 14px;
+                font-variant-numeric: tabular-nums;
+                -webkit-font-smoothing: antialiased;
                 height: 100vh;
+                height: 100dvh;
                 display: flex;
                 justify-content: center;
                 padding: 1.5rem 1rem;
@@ -33,7 +54,61 @@
                 max-width: 960px;
                 display: flex;
                 flex-direction: column;
+                overflow: hidden;
+                background: #000;
                 border: 1px solid var(--line);
+                border-radius: 10px;
+                box-shadow: 0 24px 100px rgba(255, 176, 0, 0.075), 0 8px 24px rgba(0, 0, 0, 0.6);
+            }
+            /* Behind the pane: static dots and twinkling dots. Nothing slides. */
+            #backdrop {
+                position: fixed;
+                inset: 0;
+                z-index: -1;
+                pointer-events: none;
+            }
+            #backdrop::after {
+                content: "";
+                position: absolute;
+                inset: 0;
+                background-image: radial-gradient(circle, rgba(255, 176, 0, var(--dot-opacity)) var(--dot-size), transparent calc(var(--dot-size) + 0.5px));
+                background-size: var(--dot-gap) var(--dot-gap);
+                mask-image: var(--dot-mask);
+            }
+            #sparkles {
+                position: absolute;
+                inset: 0;
+                mask-image: var(--dot-mask);
+            }
+            #sparkles span {
+                position: absolute;
+                width: calc(var(--dot-size) * 2 + 1px);
+                height: calc(var(--dot-size) * 2 + 1px);
+                margin: calc(var(--dot-size) * -1 - 0.5px) 0 0 calc(var(--dot-size) * -1 - 0.5px);
+                border-radius: 50%;
+                background: var(--amber);
+                box-shadow: 0 0 8px var(--amber);
+                opacity: 0;
+                animation: twinkle 7s ease-out infinite;
+            }
+            body[data-bg="none"] #sparkles,
+            body[data-bg="none"] #backdrop::after {
+                display: none;
+            }
+            @keyframes twinkle {
+                /* dark most of the time, then a quick flash that fades away: a twinkle, not a slow pulse */
+                0%,
+                70%,
+                100% {
+                    opacity: 0;
+                }
+                78% {
+                    opacity: var(--twinkle-peak);
+                }
+            }
+            ::selection {
+                background: var(--amber);
+                color: #000;
             }
             header {
                 display: flex;
@@ -62,18 +137,23 @@
                 font: inherit;
                 padding: 0.6rem 0.8rem;
                 border: 1px solid var(--line);
-                border-radius: 4px;
+                border-radius: 6px;
                 background: none;
                 color: var(--amber);
                 box-shadow: 0 2px 0 var(--line); /* raised look */
                 cursor: pointer;
+                transition: filter 0.15s, background 0.15s, border-color 0.15s, transform 0.12s, box-shadow 0.15s;
+            }
+            button:focus-visible {
+                outline: 2px solid var(--amber);
+                outline-offset: 2px;
             }
             button:hover:not(:disabled) {
                 filter: brightness(1.2);
             }
             button:active:not(:disabled) {
                 transform: translateY(2px);
-                box-shadow: 0 1px 0 var(--dim);
+                box-shadow: 0 1px 0 var(--shade);
             }
             button:disabled {
                 opacity: 0.3;
@@ -88,13 +168,24 @@
                 font-weight: 700;
                 letter-spacing: 0.08em;
                 text-transform: uppercase;
-                box-shadow: 0 3px 0 var(--dim);
+                box-shadow: 0 3px 0 var(--shade);
+            }
+            button.solid:hover:not(:disabled) {
+                transform: translateY(-2px);
+                box-shadow: 0 5px 0 var(--shade), 0 8px 18px var(--glow);
+            }
+            button.solid:active:not(:disabled) {
+                transform: translateY(2px);
+                box-shadow: 0 1px 0 var(--shade);
             }
             header button.solid {
                 padding: 0.35rem 0.8rem;
                 border-color: #000;
                 background: #000;
                 color: var(--amber);
+            }
+            header button.solid:hover:not(:disabled) {
+                background: var(--hover); /* filter: brightness does nothing to black, so lighten it instead; the border stays black */
             }
 
             #settings {
@@ -107,6 +198,31 @@
                 color: var(--dim);
                 border-bottom: 1px solid var(--line);
             }
+            /* One tooltip for anything with data-tip; see the script */
+            #tip {
+                position: fixed;
+                z-index: 20;
+                width: max-content;
+                max-width: 280px;
+                padding: 0.4rem 0.6rem;
+                font-size: 0.7rem;
+                line-height: 1.5;
+                white-space: pre-line;
+                color: var(--muted);
+                background: #000;
+                border: 1px solid var(--line);
+                border-radius: 6px;
+                box-shadow: 0 6px 20px rgba(0, 0, 0, 0.7);
+                opacity: 0;
+                pointer-events: none;
+                transition: opacity 0.15s;
+            }
+            #tip.show {
+                opacity: 1;
+            }
+            #settings .left {
+                margin-right: auto; /* pushes the other settings to the right */
+            }
             #settings select {
                 margin-left: 0.4rem;
                 padding: 0.15rem 0.3rem;
@@ -114,10 +230,63 @@
                 color: var(--amber);
                 background: #000;
                 border: 1px solid var(--line);
-                border-radius: 4px;
+                border-radius: 6px;
                 cursor: pointer;
+                transition: border-color 0.15s;
+            }
+            #settings select:hover,
+            #settings select:focus-visible {
+                border-color: var(--amber);
+                outline: none;
             }
 
+            #tape {
+                flex: none; /* never squeezed away when the window is short */
+                overflow: hidden;
+                white-space: nowrap;
+                font-size: 0.75rem;
+                border-bottom: 1px solid var(--line);
+                scrollbar-width: thin;
+                scrollbar-color: var(--line) transparent; /* only seen when the tape is stopped */
+                mask-image: linear-gradient(90deg, transparent, #000 4%, #000 96%, transparent); /* fade at both ends */
+            }
+            #tape:empty {
+                display: none;
+            }
+            #tape .track {
+                display: inline-block;
+                padding: 0.35rem 0;
+                animation: scroll calc(var(--tape-speed) * var(--tape-mult, 1)) linear infinite;
+            }
+            #tape.off {
+                overflow-x: auto; /* stopped: scroll it by hand */
+            }
+            #tape.off .track {
+                animation: none;
+            }
+            #tape:hover .track {
+                animation-play-state: paused;
+            }
+            #tape .item {
+                margin-right: 2.2rem;
+                transition: filter 0.15s;
+            }
+            #tape .item:hover {
+                filter: brightness(1.35);
+            }
+            #tape .note {
+                color: var(--dim);
+                font-style: italic;
+            }
+            #tape .symbol {
+                margin-right: 0.4rem;
+                color: var(--muted);
+            }
+            @keyframes scroll {
+                to {
+                    transform: translateX(-50%);
+                }
+            }
             #messages {
                 flex: 1;
                 overflow-y: auto;
@@ -125,6 +294,22 @@
                 display: flex;
                 flex-direction: column;
                 gap: 1.1rem;
+                scrollbar-width: thin;
+                scrollbar-color: var(--line) transparent;
+            }
+            /* New rows ease in */
+            .intro,
+            .msg,
+            details.tool,
+            div.run,
+            img.chart {
+                animation: rise 0.25s ease-out backwards; /* backwards only: a held end state would block the hover transforms */
+            }
+            @keyframes rise {
+                from {
+                    opacity: 0;
+                    transform: translateY(6px);
+                }
             }
             .msg {
                 max-width: 85%;
@@ -159,11 +344,21 @@
             .msg.loading .content {
                 color: var(--dim);
             }
+            .msg.loading .content::after {
+                content: "▌";
+                margin-left: 0.25rem;
+                animation: blink 1s steps(2, start) infinite;
+            }
+            @keyframes blink {
+                to {
+                    visibility: hidden;
+                }
+            }
             .msg b {
                 color: var(--amber);
             }
             .up {
-                color: #00d26a;
+                color: var(--green);
             }
             .down {
                 color: var(--red);
@@ -179,13 +374,16 @@
                 margin-top: 0.5rem;
                 text-align: left;
                 font-size: 0.85rem;
+                transition: background 0.15s, border-color 0.15s, transform 0.15s;
             }
             .intro button::before {
                 content: "› ";
                 font-weight: 700;
             }
             .intro button:hover {
-                background: #1a1200;
+                background: var(--hover);
+                border-color: var(--amber);
+                transform: translateX(3px);
             }
 
             details.tool,
@@ -193,9 +391,16 @@
                 padding: 0.4rem 0.75rem;
                 font-size: 0.75rem;
                 color: var(--dim);
-                background: #0d0900;
+                background: var(--panel);
                 border: 1px solid var(--line);
                 border-left: 3px solid var(--amber);
+                border-radius: 0 6px 6px 0;
+                transition: background 0.15s, border-color 0.15s, transform 0.15s;
+            }
+            details.tool:hover {
+                background: var(--hover);
+                border-color: var(--amber);
+                transform: translateX(3px);
             }
             details.tool summary {
                 cursor: pointer;
@@ -241,6 +446,7 @@
                 max-width: 720px;
                 aspect-ratio: 720 / 300;
                 border: 1px solid var(--line);
+                border-radius: 6px;
             }
 
             #input-area {
@@ -249,6 +455,11 @@
                 align-items: center;
                 padding: 0.75rem 1rem;
                 border-top: 1px solid var(--line);
+                transition: border-color 0.2s, box-shadow 0.2s;
+            }
+            #input-area:focus-within {
+                border-top-color: var(--amber);
+                box-shadow: 0 -12px 30px -20px var(--glow);
             }
             #input-area::before {
                 content: ">";
@@ -262,6 +473,7 @@
                 outline: none;
                 color: #fff;
                 font: inherit;
+                caret-color: var(--amber);
             }
             #user-input::placeholder {
                 color: var(--faint);
@@ -273,18 +485,71 @@
                 color: var(--faint);
                 border-top: 1px solid var(--line);
             }
+
+            @media (prefers-reduced-motion: reduce) {
+                #tape {
+                    overflow-x: auto;
+                }
+                #sparkles span,
+                #tape .track,
+                .intro,
+                .msg,
+                details.tool,
+                div.run,
+                img.chart,
+                .msg.loading .content::after {
+                    animation: none;
+                }
+            }
+            @media (max-width: 640px) {
+                body {
+                    padding: 0;
+                }
+                #container {
+                    border: none;
+                    border-radius: 0;
+                }
+                header {
+                    padding: 0.5rem 0.75rem;
+                }
+                header .name {
+                    flex: 1;
+                    font-size: 1.3rem;
+                }
+                header .tagline {
+                    display: none;
+                }
+                #settings {
+                    justify-content: space-between;
+                    padding: 0.4rem 0.75rem;
+                }
+                #messages {
+                    padding: 1rem 0.75rem;
+                }
+                .msg {
+                    max-width: 100%;
+                }
+                #input-area {
+                    padding: 0.6rem 0.75rem;
+                }
+            }
         </style>
     </head>
     <body>
+        <div id="backdrop"><div id="sparkles"></div></div>
+        <div id="tip"></div>
         <div id="container">
             <header>
                 <span class="name">TICKER</span>
                 <span class="tagline">AI research agent for stocks, options, news and filings</span>
                 <button class="solid" id="new-btn">New session</button>
             </header>
+            <div id="tape"></div>
             <div id="settings">
-                <label>Model <select id="model"></select></label>
-                <label title="Most tools the agent may call per question. It then answers with what it has.">Tool call limit <select id="limit"></select></label>
+                <label data-tip="Speed of the scrolling price tape. Off stops it; you can then scroll it by hand.">Tape <select id="tape-speed"></select></label>
+                <label class="left" data-tip="How often the background dots flash. Off stops them.">Twinkle <select id="twinkle"></select></label>
+                <label data-tip="Which Gemini model answers. Flash-Lite is the fastest and cheapest, Flash is stronger but slower. You can switch mid-chat and the conversation carries over.">Model <select id="model"></select></label>
+                <label data-tip="Most tools the agent may call per question. It then answers with what it has.">Tool limit <select id="limit"></select></label>
             </div>
             <div id="messages"></div>
             <div id="input-area">
@@ -299,6 +564,9 @@
             const sendBtn = document.getElementById("send-btn");
             const modelSelect = document.getElementById("model");
             const limitSelect = document.getElementById("limit");
+            const twinkleSelect = document.getElementById("twinkle");
+            const tapeSelect = document.getElementById("tape-speed");
+            const tape = document.getElementById("tape");
             let sessionId = null;
 
             const EXAMPLES = [
@@ -315,15 +583,97 @@
                 return node;
             }
 
-            // The models and the limit range come from the server, so they are defined in one place (app.py).
-            async function loadConfig() {
-                try {
-                    const config = await (await fetch("/config")).json();
-                    for (const name of config.models) modelSelect.append(new Option(name, name));
-                    modelSelect.value = config.default_model;
-                    for (let n = 1; n <= config.max_tool_calls; n++) limitSelect.append(new Option(n, n));
-                    limitSelect.value = config.default_tool_calls;
-                } catch (e) {} // without it the chat still works, with the server's defaults
+            // The models and the limit range are defined once in app.py, which fills in __CONFIG__ when it serves this page.
+            const config = __CONFIG__;
+            // Tape and twinkle speeds: time per loop or flash as a multiple of the Normal setting in the stylesheet (bigger is slower, 0 is off).
+            const SPEEDS = { Off: 0, Slow: 1.5, Normal: 1, Fast: 0.6 };
+            function fillSelect(select, names, selected) {
+                for (const name of names) select.append(new Option(name, name));
+                select.value = selected;
+            }
+            fillSelect(modelSelect, config.models, config.default_model);
+            fillSelect(limitSelect, Array.from({ length: config.max_tool_calls }, (_, i) => i + 1), config.default_tool_calls);
+            fillSelect(tapeSelect, Object.keys(SPEEDS), "Normal");
+            fillSelect(twinkleSelect, Object.keys(SPEEDS), "Normal");
+
+            // Background look: ?bg=twinkle (default) or ?bg=none
+            document.body.dataset.bg = new URLSearchParams(location.search).get("bg") || "twinkle";
+
+            tapeSelect.addEventListener("change", () => {
+                tape.classList.toggle("off", !SPEEDS[tapeSelect.value]);
+                tape.style.setProperty("--tape-mult", SPEEDS[tapeSelect.value]);
+            });
+            twinkleSelect.addEventListener("change", drawSparkles);
+
+            // A few dots on the grid fade in and out at random, so nothing slides. Dots hidden behind the pane are skipped.
+            function drawSparkles() {
+                const sparkles = document.getElementById("sparkles");
+                sparkles.replaceChildren();
+                if (document.body.dataset.bg !== "twinkle" || !SPEEDS[twinkleSelect.value]) return;
+                const css = (name) => parseFloat(getComputedStyle(document.body).getPropertyValue(name));
+                const gap = css("--dot-gap"), density = css("--twinkle-density");
+                const speed = css("--twinkle-speed") * SPEEDS[twinkleSelect.value];
+                const pane = document.getElementById("container").getBoundingClientRect();
+                for (let y = gap / 2; y < innerHeight; y += gap) {
+                    for (let x = gap / 2; x < innerWidth; x += gap) {
+                        if (Math.random() > density || (x > pane.left && x < pane.right && y > pane.top && y < pane.bottom)) continue;
+                        const dot = make("span");
+                        dot.style.cssText = `left:${x}px;top:${y}px;animation-duration:${speed * (0.6 + Math.random() * 0.8)}s;animation-delay:-${Math.random() * speed}s`;
+                        sparkles.append(dot);
+                    }
+                }
+            }
+
+            // Tooltips: anything with data-tip shows it once the pointer has rested on it for a second.
+            const TIP_DELAY = parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--tip-delay")) * 1000;
+            const tip = document.getElementById("tip");
+            let tipTimer;
+            function hideTip() {
+                clearTimeout(tipTimer);
+                tip.classList.remove("show");
+            }
+            document.addEventListener("mouseover", (e) => {
+                hideTip();
+                const target = e.target.closest("[data-tip]");
+                if (!target) return;
+                tipTimer = setTimeout(() => {
+                    tip.textContent = target.dataset.tip;
+                    const box = target.getBoundingClientRect();
+                    tip.style.top = box.bottom + 8 + "px";
+                    tip.style.left = Math.max(8, Math.min(box.left, innerWidth - tip.offsetWidth - 8)) + "px"; // stay on screen
+                    tip.classList.add("show");
+                }, TIP_DELAY);
+            });
+            document.addEventListener("mouseout", (e) => e.relatedTarget || hideTip()); // pointer left the window
+            for (const event of ["mousedown", "keydown", "scroll"]) document.addEventListener(event, hideTip, true);
+
+            // What the tape tooltip says about a symbol
+            const money = (x) => (x == null ? "n/a" : x.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })); // n/a: the server sent no such field
+            const signed = (x) => (x == null ? "n/a" : (x >= 0 ? "+" : "-") + money(Math.abs(x)));
+            const compact = (x) => Intl.NumberFormat("en", { notation: "compact", maximumFractionDigits: 1 }).format(x);
+            function tapeTip(row) {
+                return [
+                    row.name || row.symbol,
+                    `Close ${money(row.price)}  ${signed(row.change)} (${signed(row.change_pct)}%)`,
+                    `Previous close ${money(row.prev_close)}`,
+                    `Day range ${money(row.day_low)} - ${money(row.day_high)}`,
+                    `52-week range ${money(row.year_low)} - ${money(row.year_high)}`,
+                    row.volume > 0 ? `Volume ${compact(row.volume)}` : "", // indices have no volume
+                ].filter(Boolean).join("\n");
+            }
+
+            // A scrolling tape of last prices, green if up on the day and red if down. It shows twice so the loop has no gap.
+            function drawTape(rows) {
+                const note = make("span", "item note", "LAST CLOSE ›");
+                const items = [note].concat(rows.map((row) => {
+                    const item = make("span", "item");
+                    item.dataset.tip = tapeTip(row);
+                    item.append(make("span", "symbol", row.symbol), money(row.price) + " ", make("span", row.change_pct >= 0 ? "up" : "down", signed(row.change_pct) + "%"));
+                    return item;
+                }));
+                const track = make("div", "track");
+                track.append(...items, ...items.map((item) => item.cloneNode(true)));
+                tape.replaceChildren(track);
             }
 
             function showIntro() {
@@ -351,6 +701,7 @@
             // Show **bold** and colour signed numbers; drop *italic* markers and turn "* " bullets into "• ".
             function renderText(node, text) {
                 text = text.replace(/^\s*[*-] /gm, "• ").replace(/(?<!\*)\*([^*\n]+)\*(?!\*)/g, "$1");
+                text = text.replace(/\*\*(\$?[\d,.]+)\*\*%/g, "**$1%**").replace(/([+\-−])(\$?)\*\*/g, "**$1$2"); // +**1.5**% and +$**6** -> **+1.5%** and **+$6**
                 text.split(/(\*\*[^*]+\*\*)/).forEach((part, i) => {
                     if (i % 2) {
                         const bold = make("b");
@@ -370,17 +721,17 @@
                 return message;
             }
 
-            // Which model and tool call limit produced this answer, and how many calls it used
+            // Which model and tool limit produced this answer, and how many calls it used
             function addRun(model, limit, used, before) {
                 const row = make("div", "run");
-                row.append(make("b", "", "MODEL"), model, make("b", "", "TOOL CALL LIMIT"), `${limit} (${used} used)`);
+                row.append(make("b", "", "MODEL"), model, make("b", "", "TOOL LIMIT"), `${limit} (${used} used)`);
                 messages.insertBefore(row, before);
             }
 
-            // Shown in red when the agent used its whole tool call limit and had to answer without more calls
+            // Shown in red when the agent used its whole tool limit and had to answer without more calls
             function addLimitNotice(limit, before) {
                 const row = make("div", "run limit");
-                row.append(make("b", "", "TOOL CALL LIMIT REACHED"), `all ${limit} call${Number(limit) === 1 ? "" : "s"} used, so the answer uses what was fetched`);
+                row.append(make("b", "", "TOOL LIMIT REACHED"), `all ${limit} call${Number(limit) === 1 ? "" : "s"} used, so the answer uses what was fetched`);
                 messages.insertBefore(row, before);
             }
 
@@ -417,19 +768,14 @@
                     const res = await fetch("/chat", {
                         method: "POST",
                         headers: { "Content-Type": "application/json" },
-                        body: JSON.stringify({
-                            message: text,
-                            session_id: sessionId,
-                            model: model || undefined,
-                            tool_call_limit: Number(limit) || undefined,
-                        }),
+                        body: JSON.stringify({ message: text, session_id: sessionId, model, tool_call_limit: Number(limit) }),
                     });
-                    const data = await res.json();
+                    const data = await res.json().catch(() => ({})); // an error page is not JSON
                     if (!res.ok) throw new Error(typeof data.detail === "string" ? data.detail : "the server returned " + res.status);
                     sessionId = data.session_id;
-                    if (model) addRun(model, limit, data.tool_calls.length, loading);
+                    addRun(model, limit, data.tool_calls.length, loading);
                     for (const call of data.tool_calls) addToolCall(call, loading);
-                    if (Number(limit) && data.tool_calls.length >= Number(limit)) addLimitNotice(limit, loading);
+                    if (data.tool_calls.length >= Number(limit)) addLimitNotice(limit, loading);
                     content.replaceChildren();
                     renderText(content, data.response);
                 } catch (e) {
@@ -451,7 +797,9 @@
             sendBtn.addEventListener("click", () => send());
             userInput.addEventListener("keydown", (e) => e.key === "Enter" && send());
             document.getElementById("new-btn").addEventListener("click", newSession);
-            loadConfig();
+            if (config.tape.length) drawTape(config.tape); // empty if every quote failed at start-up
+            drawSparkles();
+            addEventListener("resize", drawSparkles);
             showIntro();
             userInput.focus();
         </script>

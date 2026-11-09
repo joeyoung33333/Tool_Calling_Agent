@@ -13,13 +13,13 @@ For research only, not investment advice. Always double-check results.
 ### Design Choices
 
 - **Agent:** Gemini on Vertex AI via LiteLLM, in a tool-calling loop.
-- **Settings:** The UI allows model selection (four Gemini models) and setting a tool call limit of 1 to 10 (default 5). At the limit, the agent answers with what it has, and the UI shows a red limit-reached notice.
-- **Tools:** 6 tools backed by external data sources (Cboe, Google News, SEC EDGAR), using free public feeds with no API keys. Tools include descriptions, argument examples, and actionable error messages.
+- **Settings:** The UI allows model selection (four Gemini models) and setting a tool limit of 1 to 10 (default 5). At the limit, the agent answers with what it has, and the UI shows a red limit-reached notice.
+- **Tools:** 8 tools backed by external data sources (Cboe, Google News, SEC EDGAR, Nasdaq Trader, US Treasury), using free public feeds with no API keys. Tools include descriptions, argument examples, and actionable error messages.
 - **Explaining Moves:** The agent lines up price history with news and SEC filings around the date, then judges which items could plausibly move the stock.
 - **Charts:** Drawn only on request. `get_chart` builds an SVG in `chart.py`; the UI shows it and the model only sees a short text summary.
 - **Analysis:** Price returns, volatility and implied moves are computed in Python, not by the model.
 - **Memory:** Full message history is kept in memory per `session_id`, so follow-ups work and sessions stay separate; it resets on restart or New Session.
-- **UI:** A modern, minimal take on a Bloomberg terminal (black, amber, monospace) with clickable sample queries.
+- **UI:** A modern, minimal take on a Bloomberg terminal (black, amber, monospace) with a scrolling price tape and clickable sample queries.
 
 ### Market Universe
 
@@ -71,9 +71,11 @@ Then open http://localhost:8000. If it can't resolve the project, set `GOOGLE_CL
 | `get_price` | Latest price, change, bid/ask, volume, 30-day IV | Cboe |
 | `get_price_history` | Return, high/low, realized vol over a date range | Cboe |
 | `get_chart` | Daily closing-price line chart, on request | Cboe |
+| `get_risk_metrics` | Volatility, max drawdown, VaR, Sharpe, Sortino, beta and alpha vs a benchmark | Cboe, US Treasury |
 | `get_option_chain` | Strikes near the money, ATM IV, implied move, put/call ratios | Cboe |
 | `get_news` | Headlines for a ticker or keywords: last 7 days, or a date range | Google News |
 | `get_filings` | SEC 8-K events and 10-K/10-Q reports: latest, or a date range | SEC EDGAR |
+| `search_symbol` | Ticker for a company or fund name ("Nvidia" gives NVDA) | Nasdaq Trader |
 
 ## Future Improvements
 
@@ -87,19 +89,34 @@ Then open http://localhost:8000. If it can't resolve the project, set `GOOGLE_CL
 
 **Analysis**
 
-- Further analysis tools: risk metrics (volatility, drawdown, VaR, beta), correlations and comparisons
+- Further analysis tools: risk metrics for several symbols at once, correlations and comparisons
 - Richer options outputs: skew, term structure, open-interest strikes
 - Backtest simulation: run a trading strategy over historical prices and report returns and drawdown
-- Order book display (depth, spread, imbalance) and slippage estimates
+- Pairs and statistical arbitrage research: give the agent pairs or ideas to try, and it finds likely candidates with the tools, backtests them and summarizes risk, performance and results; covers statistical pairs (stock vs stock, ETF vs ETF) and cross-product pairs (e.g. futures vs ETFs, which need a futures data feed)
+- Order book display (depth, spread, imbalance) and slippage estimates; needs a depth data feed, since the free Cboe quotes only show the best bid and ask
 
 **Charts**
 
 - More chart types (comparisons, curves)
+
+**User Experience**
+
+- Streaming progress: show each tool call as it happens, instead of one wait on "Fetching data..."
+- Remember settings (model, tool limit, tape and twinkle speed) between visits
+- Input history: the up and down arrow keys recall the previous or next typed message
+- Text auto-complete for tickers and company names
+- Multi-session handling: keep several chats open, switch between them and resume old ones; needs stored sessions, since chats now live in server memory and reset on restart
+
+**Evaluation**
+
+- Eval script (`evals/`): replays a fixed set of questions against a running server and checks tool choice, declines, signed numbers and name lookups for each model
+- Separate evaluation agent: replays test questions, checks answers against the tool results (numbers, tool choice, declines), and scores each model
 
 ## Files
 
 - `app.py`: harness loop, sessions, `/chat`, `/clear`
 - `tools.py`: tool schemas, tool logic, `run_tool()`
 - `chart.py`: draws line charts as SVG
-- `data.py`: Cboe, Google News and SEC EDGAR fetchers
+- `risk.py`: volatility, drawdown, Sharpe and beta calculations
+- `data.py`: Cboe, Google News, SEC EDGAR, Nasdaq Trader and Treasury fetchers
 - `index.html`: UI

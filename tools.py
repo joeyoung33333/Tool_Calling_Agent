@@ -7,13 +7,14 @@ where no dates means the latest. Limits and unsupported items are checked here.
 
 import json
 import math
-import statistics
 from datetime import date
 
 import chart
 import data
+import risk
 from data import DataError
 
+MIN_RISK_BARS = 60  # fewest trading days (about 3 months) for risk figures to mean anything
 MAX_HISTORY_DAYS = 3650  # longest price history or filings range
 MAX_NEWS_DAYS = 14  # longest news range (Google News returns at most 100 items per query)
 CHAIN_STRIKES = 11  # strikes shown around the money in get_option_chain
@@ -54,24 +55,24 @@ def _history(symbol: str, start: str, end: str | None) -> tuple[str, date, list[
     return s, first, bars
 
 
+def _period(symbol: str, bars: list[dict]) -> dict:
+    """What every range tool reports: the days covered, the first and last close and the return."""
+    first, last = bars[0]["close"], bars[-1]["close"]
+    return {"symbol": symbol, "start": bars[0]["date"], "end": bars[-1]["date"], "first_close": first, "last_close": last, "return_pct": round((last / first - 1) * 100, 2)}
+
+
 def get_price_history(symbol: str, start: str, end: str | None = None) -> dict:
     s, first, bars = _history(symbol, start, end)
     closes = [b["close"] for b in bars]
-    daily_returns = [math.log(b / a) for a, b in zip(closes, closes[1:])]
-    # Realized volatility needs at least two returns; 252 trading days a year.
-    vol = statistics.stdev(daily_returns) * math.sqrt(252) * 100 if len(daily_returns) > 1 else None
-    # The last 5 closes each carry their own day's move, so a one-day jump is never confused with the period return.
+    # Realized volatility needs at least two daily returns. The last 5 closes each carry their own day's move,
+    # so a one-day jump is never confused with the period return.
+    vol = risk.annual_vol(risk.returns(closes)) * 100 if len(bars) > 2 else None
     recent = [
         {"date": bars[i]["date"], "close": bars[i]["close"], "change_pct": round((bars[i]["close"] / bars[i - 1]["close"] - 1) * 100, 2)}
         for i in range(max(1, len(bars) - 5), len(bars))
     ]
     out = {
-        "symbol": s,
-        "start": bars[0]["date"],
-        "end": bars[-1]["date"],
-        "first_close": closes[0],
-        "last_close": closes[-1],
-        "return_pct": round((closes[-1] / closes[0] - 1) * 100, 2),
+        **_period(s, bars),
         "period_high": max(b["high"] for b in bars),
         "period_low": min(b["low"] for b in bars),
         "realized_vol_pct": round(vol, 2) if vol is not None else None,
@@ -92,16 +93,39 @@ def get_chart(symbol: str, start: str, end: str | None = None) -> dict:
         thinned.append(bars[-1])  # always keep the last day
     title = f"{s} daily close, {bars[0]['date']} to {bars[-1]['date']}"
     return {
-        "symbol": s,
-        "start": bars[0]["date"],
-        "end": bars[-1]["date"],
+        **_period(s, bars),
         "daily_bars": len(bars),
-        "first_close": bars[0]["close"],
-        "last_close": bars[-1]["close"],
-        "return_pct": round((bars[-1]["close"] / bars[0]["close"] - 1) * 100, 2),
         "chart": "A daily closing-price line chart is now shown to the user.",
         "chart_svg": chart.line_chart_svg([(b["date"], b["close"]) for b in thinned], title, "Close"),  # for the UI, not the model
     }
+
+
+def get_risk_metrics(symbol: str, start: str, end: str | None = None, benchmark: str = "SPY") -> dict:
+    s, _, bars = _history(symbol, start, end)
+    b, _, bench_bars = _history(benchmark, start, end)
+    bench = {bar["date"]: bar["close"] for bar in bench_bars}
+    bars = [bar for bar in bars if bar["date"] in bench]  # the same days for both
+    if len(bars) < MIN_RISK_BARS:
+        raise DataError(f"Only {len(bars)} trading days of {s} overlap {b} in this range, but at least {MIN_RISK_BARS} are needed. Use an earlier 'start'.")
+    dates = [bar["date"] for bar in bars]
+    note = None
+    try:
+        rf_pct = data.risk_free_rate(date.fromisoformat(dates[0]), date.fromisoformat(dates[-1]))  # average 3-month Treasury bill yield
+    except DataError:
+        rf_pct, note = 0.0, "Treasury rates were unavailable, so Sharpe and Sortino assume a 0% risk-free rate."
+
+    out = {
+        "symbol": s,
+        "benchmark": b,
+        "start": dates[0],
+        "end": dates[-1],
+        "trading_days": len(dates),
+        "risk_free_rate_pct": round(rf_pct, 2),
+        **risk.summary(dates, [bar["close"] for bar in bars], [bench[d] for d in dates], rf_pct),
+        "source": "Cboe, US Treasury",
+        "delay": "daily bars, split-adjusted; price return only (no dividends)",
+    }
+    return {**out, "note": note} if note else out
 
 
 def get_option_chain(symbol: str, expiry: str | None = None) -> dict:
@@ -135,6 +159,7 @@ def get_option_chain(symbol: str, expiry: str | None = None) -> dict:
         return {k: c[k] for k in ("bid", "ask", "iv_pct", "delta", "open_interest", "volume")}
 
     straddle = mid(calls[strike]) + mid(puts[strike])
+    move = straddle / spot * 100  # the straddle price as a % of spot
     return {
         "symbol": chain["symbol"],
         "spot": spot,
@@ -143,7 +168,8 @@ def get_option_chain(symbol: str, expiry: str | None = None) -> dict:
         "atm_strike": strike,
         "atm_iv_pct": round((calls[strike]["iv_pct"] + puts[strike]["iv_pct"]) / 2, 2),
         "atm_straddle": round(straddle, 2),
-        "implied_move_pct": round(straddle / spot * 100, 2),  # the straddle price as a % of spot
+        "implied_move_pct": round(move, 2),
+        "implied_move": f"+{move:.2f}% / -{move:.2f}% (+${straddle:.2f} / -${straddle:.2f})",  # signed so the UI can colour it
         "put_call_volume_ratio": put_call_ratio("volume"),
         "put_call_open_interest_ratio": put_call_ratio("open_interest"),
         "chain": [{"strike": k, "call": side(calls[k]), "put": side(puts[k])} for k in sorted(near)],
@@ -181,10 +207,12 @@ def _tool(name: str, description: str, properties: dict, required: list[str]) ->
     return {"type": "function", "function": {"name": name, "description": description, "parameters": parameters}}
 
 
-_SYMBOL = {"type": "string", "description": "Ticker, not a company name. E.g. 'NVDA', 'SPY', 'QQQ', 'VIX'."}
+_SYMBOL = {"type": "string", "description": "Ticker, not a company name (for a name, call search_symbol first). E.g. 'NVDA', 'SPY', 'QQQ', 'VIX'."}
+_NAME = {"type": "string", "description": "A company or fund name, not a ticker. E.g. 'Nvidia', 'Berkshire Hathaway', 'S&P 500 ETF'."}
 _QUERY = {"type": "string", "description": "A ticker like 'NVDA', or keywords like 'Fed rate decision' or 'AI chip export rules'."}
 _START = {"type": "string", "description": "First date, YYYY-MM-DD, worked out from today's date (e.g. 90 days ago for 'last 90 days')."}
 _END = {"type": "string", "description": "Last date, YYYY-MM-DD. Defaults to today."}
+_BENCHMARK = {"type": "string", "description": "Ticker to measure beta and alpha against. Default 'SPY'; 'QQQ' suits tech stocks."}
 _EXPIRY = {"type": "string", "description": "Expiration date, YYYY-MM-DD. Omit for the nearest; if not listed, the error returns valid dates."}
 
 TOOLS = [
@@ -214,6 +242,16 @@ TOOLS = [
         ["symbol", "start"],
     ),
     _tool(
+        "get_risk_metrics",
+        "Risk figures for ONE US stock, ETF or index between two dates: volatility, max drawdown (with dates), 95% "
+        "one-day VaR/CVaR, Sharpe, Sortino, Calmar, and beta, alpha and correlation against a benchmark (default SPY) "
+        "with the benchmark's own return, volatility and drawdown for comparison. Needs at least 60 trading days; "
+        "1 to 5 years is typical. Price returns only (no dividends). For a plain return use get_price_history; for "
+        "expected future volatility use get_option_chain.",
+        {"symbol": _SYMBOL, "start": _START, "end": _END, "benchmark": _BENCHMARK},
+        ["symbol", "start"],
+    ),
+    _tool(
         "get_option_chain",
         "Options on ONE US stock, ETF or index at one expiry: strikes around the money (bid/ask, implied vol, delta, "
         "open interest, volume), ATM implied vol, ATM straddle, the implied move % and put/call ratios. ~15 min "
@@ -238,6 +276,15 @@ TOOLS = [
         {"symbol": _SYMBOL, "start": _START, "end": _END},
         ["symbol"],
     ),
+    _tool(
+        "search_symbol",
+        "Find the ticker for a company or fund NAME: up to 5 matches, best first, each with symbol, name and "
+        "type (stock or ETF). Call it when the user gives a name instead of a ticker, because the other "
+        "tools need a ticker. Several matches can be valid (share classes like GOOG and GOOGL): pick the best fit and "
+        "say which you used. US-listed stocks and ETFs only.",
+        {"query": _NAME},
+        ["query"],
+    ),
 ]
 
 # What the harness runs: tool name -> Python function.
@@ -245,9 +292,11 @@ TOOL_MAP = {
     "get_price": data.price,
     "get_price_history": get_price_history,
     "get_chart": get_chart,
+    "get_risk_metrics": get_risk_metrics,
     "get_option_chain": get_option_chain,
     "get_news": get_news,
     "get_filings": get_filings,
+    "search_symbol": data.search_symbol,
 }
 
 

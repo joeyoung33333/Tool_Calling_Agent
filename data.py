@@ -1,7 +1,11 @@
-"""Market-data fetchers (free, no API keys): Cboe (stocks, ETFs, indices, options), Google News (headlines)
-and SEC EDGAR (company filings). Equities only.
+"""Market-data fetchers (free, no API keys): Cboe (stocks, ETFs, indices, options), Google News (headlines),
+SEC EDGAR (company filings), the Nasdaq Trader symbol directory (names to tickers) and US Treasury (bill rates).
+Equities only.
 
 Public API, keyed by `symbol` (e.g. 'NVDA', 'SPY', 'VIX') or `query`, with `start`/`end` dates for ranges:
+    search_symbol(query)                   tickers for a company or fund name
+    company_name(symbol)                   the listed name of a stock or ETF
+    risk_free_rate(start, end)             average 3-month Treasury bill yield, % a year
     price(symbol)                          latest price snapshot
     price_history(symbol, start, end)      daily bars
     option_chain(symbol)                   latest option chain
@@ -9,8 +13,10 @@ Public API, keyed by `symbol` (e.g. 'NVDA', 'SPY', 'VIX') or `query`, with `star
     filings(symbol, start, end)            SEC filings, newest first; no start/end means the latest ones
 """
 
+import csv
 import functools
 import re
+import statistics
 import xml.etree.ElementTree as ET
 from datetime import date, timedelta, timezone
 from email.utils import parsedate_to_datetime
@@ -21,13 +27,20 @@ _CBOE = "https://cdn.cboe.com/api/global/delayed_quotes"
 _NEWS = "https://news.google.com/rss/search"
 _SEC = "https://data.sec.gov"
 _SEC_TICKERS = "https://www.sec.gov/include/ticker.txt"
+_SYMBOLS = "https://www.nasdaqtrader.com/dynamic/symdir"
+_TREASURY = "https://home.treasury.gov/resource-center/data-chart-center/interest-rates/daily-treasury-rates.csv"
 # SEC asks clients to identify themselves
 _UA = "Mozilla/5.0 (compatible; ticker-agent/1.0; Columbia IEOR-4570 class project)"
 
+_TICKER = re.compile(r"[A-Z][A-Z0-9.]{0,9}")  # 'NVDA', 'BRK.B'
 _INDICES = {"VIX", "SPX", "NDX", "RUT"}  # Cboe prefixes index symbols with an underscore
 # Crypto is not supported. Some of these are also real ETF tickers (BTC is a Grayscale fund), so block them
 # rather than let a fund's price pass as the coin's price.
 _CRYPTO = {"BTC", "ETH", "XBT", "LTC", "SOL", "XRP", "DOGE", "ADA", "BITCOIN", "ETHEREUM"}
+
+# Nicknames that are not in legal names; and directory rows that are not the stock itself
+_NICKNAMES = {"google": "alphabet", "youtube": "alphabet", "facebook": "meta platforms"}
+_NOT_STOCK = re.compile(r"warrant|\brights\b|\bunits?\b|preferred|\bnotes?\b", re.I)
 
 _SEC_ITEMS = {
     "1.01": "Material agreement signed", "1.02": "Material agreement terminated", "1.03": "Bankruptcy",
@@ -51,7 +64,7 @@ def _fetch(url: str, **params) -> requests.Response:
     except requests.RequestException as e:
         raise DataError(f"Could not reach {host} ({type(e).__name__}). Try again shortly.")
     if r.status_code in (403, 404):  # Cboe answers 403 for a symbol it does not know
-        raise DataError(f"{host} has no data for this request. If you gave a ticker, use a US-listed stock, ETF or index like 'NVDA', 'SPY' or 'VIX'.")
+        raise DataError(f"{host} has no data for this request. If you gave a ticker, use a US-listed stock, ETF or index like 'NVDA', 'SPY' or 'VIX'. If you gave a company name, call search_symbol to find its ticker.")
     if r.status_code >= 400:
         raise DataError(f"{host} returned HTTP {r.status_code}. Try again shortly.")
     return r
@@ -68,8 +81,8 @@ def clean(raw: str) -> str:
     """'$nvda' -> 'NVDA', 'brk-b' -> 'BRK.B'. Rejects company names and unsupported crypto."""
     symbol = re.sub(r"[-/]USD$", "", (raw or "").strip().upper().lstrip("$^"))  # 'BTC-USD' -> 'BTC' so crypto is caught
     symbol = symbol.replace("-", ".")  # share classes: 'BRK-B' -> 'BRK.B'
-    if not re.fullmatch(r"[A-Z][A-Z0-9.]{0,9}", symbol):
-        raise DataError(f"'{raw}' is not a ticker. Pass a symbol like 'NVDA', 'SPY' or 'VIX', not a company name.")
+    if not _TICKER.fullmatch(symbol):
+        raise DataError(f"'{raw}' is not a ticker. Pass a symbol like 'NVDA', 'SPY' or 'VIX'. For a company name, call search_symbol first.")
     if symbol in _CRYPTO:
         raise DataError(
             f"Crypto is not supported, so '{raw}' is rejected (on US exchanges 'BTC' and 'ETH' are unrelated ETFs). "
@@ -223,3 +236,69 @@ def filings(symbol: str, start: date | None = None, end: date | None = None, lim
         if len(out) == limit:
             break
     return out
+
+
+@functools.cache
+def _bill_rates(year: int) -> dict[str, float]:
+    """Date -> 3-month Treasury bill yield (% a year) for one year."""
+    # Treasury par yield curve CSV, one file per year: 'Date,"1 Mo","3 Mo",...' then '10/07/2026,4.07,4.22,...'
+    # (the columns differ between years, so read the "3 Mo" column by name). A restart refreshes the current year.
+    text = _fetch(f"{_TREASURY}/{year}/all", type="daily_treasury_yield_curve", field_tdr_date_value=year, page="", _format="csv").text
+    rates = {}
+    for row in csv.DictReader(text.splitlines()):
+        if row.get("3 Mo"):
+            month, day, y = row["Date"].split("/")
+            rates[f"{y}-{month}-{day}"] = float(row["3 Mo"])
+    return rates
+
+
+def risk_free_rate(start: date, end: date) -> float:
+    """Average 3-month Treasury bill yield in % a year from `start` to `end`."""
+    rates = [r for year in range(start.year, end.year + 1) for day, r in _bill_rates(year).items() if start.isoformat() <= day <= end.isoformat()]
+    if not rates:
+        raise DataError(f"No Treasury bill rates found from {start} to {end}.")
+    return statistics.fmean(rates)
+
+
+@functools.cache
+def _symbol_directory() -> list[tuple[str, str, bool]]:
+    """(symbol, name, is_etf) for every listed stock and ETF, without test issues, warrants, rights, units or preferreds."""
+    # nasdaqlisted.txt: "Symbol|Security Name|Market Category|Test Issue|Financial Status|Round Lot Size|ETF|NextShares"
+    # otherlisted.txt:  "ACT Symbol|Security Name|Exchange|CQS Symbol|ETF|Round Lot Size|Test Issue|NASDAQ Symbol"
+    # Each starts with a header line and ends with a "File Creation Time" line; the symbol pattern skips that and preferreds ('JPM$J').
+    rows = []
+    for name, etf_column, test_column in (("nasdaqlisted", 6, 3), ("otherlisted", 4, 6)):
+        for line in _fetch(f"{_SYMBOLS}/{name}.txt").text.splitlines()[1:]:
+            f = line.split("|")
+            if len(f) > 6 and _TICKER.fullmatch(f[0]) and f[test_column] != "Y" and not _NOT_STOCK.search(f[1]):
+                rows.append((f[0], f[1], f[etf_column] == "Y"))
+    return rows
+
+
+def _squash(text: str) -> str:
+    return re.sub(r"[^a-z0-9]", "", text.lower())  # 'JP Morgan' and 'JPMorgan' both become 'jpmorgan'
+
+
+def company_name(symbol: str) -> str | None:
+    """Listed name of a stock or ETF, or None (indices are not in the directory)."""
+    name = next((name for s, name, _ in _symbol_directory() if s == symbol), None)
+    return name and re.sub(r"\s+(-\s+)?(New\s+)?(Common|Capital)\s+Stock\s*$", "", name)  # 'NVIDIA Corporation - Common Stock' -> 'NVIDIA Corporation'
+
+
+def search_symbol(query: str) -> dict:
+    """Up to 5 tickers for a company or fund name, best first: an exact ticker, then names starting with the query, then names containing it."""
+    key = _squash(_NICKNAMES.get(_squash(query), query))
+    if not key:
+        raise DataError("Give a company or fund name to search for, like 'Nvidia' or 'S&P 500 ETF'.")
+    if key.upper() in _CRYPTO:
+        clean(key)  # raises the crypto message; 'BTC' is a real ETF ticker, so it must not pass as bitcoin
+    ticker = query.strip().upper().replace("-", ".")
+    found = []
+    for symbol, name, etf in _symbol_directory():
+        squashed = _squash(name)
+        if symbol == ticker or key in squashed:
+            found.append(((symbol != ticker, not squashed.startswith(key), etf, len(squashed)), symbol, name, etf))  # stocks before ETFs, shorter first
+    if not found:
+        raise DataError(f"No US-listed stock or ETF matches '{query.strip()[:60]}'. Try fewer words, such as the company's main name. Non-US companies and crypto are not covered.")
+    matches = [{"symbol": symbol, "name": name, "type": "ETF" if etf else "stock"} for _, symbol, name, etf in sorted(found)[:5]]
+    return {"query": query.strip(), "matches": matches, "source": "Nasdaq Trader symbol directory"}
