@@ -9,7 +9,7 @@ Caching: reference data (published daily bars, the symbol directory, the CIK map
 is cached for the life of the process because it does not change. Live quotes and headlines are
 never cached.
 
-    price(symbol)                          latest quote: price, bid/ask, volume, 30-day IV
+    price(symbol)                          latest quote: price, bid/ask, open/high/low, volume
     price_history(symbol, start, end)      daily bars, oldest first
     news(query, start, end)                headlines, newest first; no dates means the last 7 days
     filings(symbol, start, end)            SEC filings, newest first; no dates means the latest
@@ -40,9 +40,10 @@ _UA = "Mozilla/5.0 (compatible; converge-agent/1.0; Columbia IEOR-4570 class pro
 _TICKER = re.compile(r"[A-Z][A-Z0-9.]{0,9}")  # 'NVDA', 'BRK.B'
 # Cboe prefixes index symbols with an underscore.
 _INDICES = {"VIX", "SPX", "RUT"}
-# Symbols this feed lacks, with the nearest thing it has: rejected up front, since a bare 403 tells the model nothing.
+# Symbols this feed lacks, with the nearest thing it has: a bare 403 tells the model nothing.
 _NO_DATA = {"NDX": "NDX is not on this feed. Use QQQ, the ETF that tracks the Nasdaq-100."}
-# Crypto is unsupported. Some double as ETF tickers (BTC is a Grayscale fund), so block them rather than pass a fund's price.
+# Crypto is unsupported, and some double as ETF tickers (BTC is a Grayscale fund), so block them
+# rather than hand back a fund's price.
 _CRYPTO = {"BTC", "ETH", "XBT", "LTC", "SOL", "XRP", "DOGE", "ADA", "BITCOIN", "ETHEREUM"}
 # Used by _symbol_directory(): directory rows that are not the common stock itself.
 _NOT_STOCK = re.compile(r"warrant|\brights\b|\bunits?\b|preferred|\bnotes?\b", re.I)
@@ -59,10 +60,7 @@ _SEC_FORMS = {"10-K": "Annual report", "10-Q": "Quarterly report"}
 
 
 def eastern_now() -> datetime:
-    """Now in US Eastern time, where the markets are (UTC if the machine has no time-zone data).
-
-    Shared because both the price tape and the agent's instructions need today's market date.
-    """
+    """Now in US Eastern, the market's clock (UTC if the machine has no time-zone data)."""
     try:
         return datetime.now(ZoneInfo("America/New_York"))
     except ZoneInfoNotFoundError:
@@ -73,10 +71,9 @@ class DataError(Exception):
     """A failure whose message is written for the model: what went wrong and what to try."""
 
 
-# Cboe throttles bursts, and the research fan-out multiplies them: two researchers screening the
-# same sector is 2 x 21 symbols x SCREEN_THREADS requests arriving together, which is what turned a
-# working screen into a wall of HTTP 429s. The cap is on this process as a whole rather than per
-# caller, because the upstream limit is per IP and does not care how many agents we are running.
+# Cboe throttles bursts and the fan-out multiplies them: two researchers on one sector is
+# 2 x 21 symbols x SCREEN_THREADS requests at once. Process-wide rather than per caller, because
+# the upstream limit is per IP and does not care how many agents we are running.
 _SLOTS = threading.BoundedSemaphore(4)
 
 
@@ -88,7 +85,7 @@ def _fetch(url: str, **params) -> requests.Response:
     except requests.RequestException as e:
         raise DataError(f"Could not reach {host} ({type(e).__name__}). Try again shortly.")
     if r.status_code in (403, 404):
-        # Cboe answers 403, not 404, for a symbol it does not carry, so both mean "unavailable here".
+        # Cboe answers 403, not 404, for a symbol it does not carry.
         raise DataError(
             f"{host} has no data for this request: the symbol is not available on this feed. "
             "Use a US-listed stock, ETF or index ticker such as 'NVDA', 'SPY' or 'VIX'."
@@ -107,7 +104,7 @@ def _json(url: str, **params) -> dict:
 
 def clean(raw: str) -> str:
     """'$nvda' -> 'NVDA', 'brk-b' -> 'BRK.B'. Rejects company names and unsupported crypto."""
-    symbol = re.sub(r"[-/]USD$", "", (raw or "").strip().upper().lstrip("$^"))  # 'BTC-USD' -> 'BTC' so crypto is caught
+    symbol = re.sub(r"[-/]USD$", "", (raw or "").strip().upper().lstrip("$^"))  # 'BTC-USD' -> 'BTC', so crypto is caught
     symbol = symbol.replace("-", ".")  # share classes: 'BRK-B' -> 'BRK.B'
     if not _TICKER.fullmatch(symbol):
         raise DataError(f"'{raw}' is not a ticker. Pass a symbol like 'NVDA', 'SPY' or 'VIX'.")
@@ -126,36 +123,32 @@ def _cboe(symbol: str) -> str:
 
 
 def _current_price(d: dict) -> float:
-    """After the close, current_price can be a late print, so use the official close that change_pct is based on."""
+    """After the close, current_price can be a late print, so prefer the official close."""
     session_over = d["last_trade_time"][11:16] >= "15:59"
     return d["close"] if session_over else d["current_price"]
 
 
 def price(symbol: str) -> dict:
     s = clean(symbol)
-    # Cboe quote fields: current_price, close, price_change, price_change_percent, bid, ask, open, high, low, volume, iv30, last_trade_time (ET).
+    # Cboe quote fields: current_price, close, bid, ask, open, high, low, volume, last_trade_time (ET).
     d = _json(f"{_CBOE}/quotes/{_cboe(s)}.json")["data"]
     return {
         "symbol": s,
         "price": _current_price(d),
         "open": d["open"],
-        "change": d["price_change"],
-        "change_pct": d["price_change_percent"],
         "bid": d["bid"],
         "ask": d["ask"],
         "high": d["high"],
         "low": d["low"],
         "volume": d["volume"],
-        "iv30_pct": None if s in _INDICES else d["iv30"],  # for an index this would be the vol of the index itself
         "as_of": d["last_trade_time"],
         "source": "Cboe",
         "delay": "~15 min delayed",
     }
 
 
-# One lock per symbol, so two threads wanting the same series do not both fetch it. lru_cache is
-# thread-safe but does not deduplicate: concurrent callers all miss, all fetch, and all populate.
-# That is exactly the pattern parallel researchers produce.
+# One lock per symbol. lru_cache is thread-safe but does not deduplicate: concurrent callers all
+# miss, all fetch and all populate, which is exactly what parallel researchers do.
 _BAR_LOCKS: dict[str, threading.Lock] = {}
 _BAR_LOCKS_GUARD = threading.Lock()
 
@@ -163,8 +156,8 @@ _BAR_LOCKS_GUARD = threading.Lock()
 def published_bars(symbol: str) -> tuple[dict, ...]:
     """`_published_bars` with duplicate concurrent fetches collapsed into one.
 
-    The first caller for a symbol fetches and fills the cache; the rest wait on its lock and then
-    read the cached value, so a screen run by four researchers costs one fetch per symbol, not four.
+    The first caller for a symbol fetches; the rest wait on its lock and read the cached value, so
+    a screen run by four researchers costs one fetch per symbol, not four.
     """
     with _BAR_LOCKS_GUARD:
         lock = _BAR_LOCKS.setdefault(symbol, threading.Lock())
@@ -176,14 +169,8 @@ def published_bars(symbol: str) -> tuple[dict, ...]:
 def _published_bars(symbol: str) -> tuple[dict, ...]:
     """Every daily bar Cboe publishes for `symbol`, oldest first.
 
-    Cached because a pair screen fetches each leg once and then every pair, episode and backtest
-    re-reads the same series: 25 symbols answer 300 pairs. Bounded generously because several
-    researchers screen different universes in one run and eviction would re-fetch what a sibling
-    just paid for. Published bars never change, so this is safe for the life of the process; the
-    live top-up in price_history() stays uncached.
-
-    Call `published_bars()` instead of this directly - it adds the per-symbol lock that stops
-    concurrent callers all missing the cache at once.
+    Cached for the process's life, safe because published bars never change: a screen re-reads each
+    leg for every pair, so 25 symbols answer 300 pairs. Call `published_bars()` for the lock.
     """
     s = clean(symbol)
     # Cboe history rows: date, open, high, low, close, volume. Index rows hold strings ("16.150000") and omit the latest session.
@@ -222,11 +209,10 @@ def price_history(symbol: str, start: date, end: date | None = None) -> list[dic
     return [b for b in bars if start.isoformat() <= b["date"] <= last]
 
 
-
 def news(query: str, start: date | None = None, end: date | None = None, limit: int = 20) -> list[dict]:
-    """Google News headlines for a ticker or keywords, newest first. No start/end means the last 7 days.
+    """Google News headlines for a ticker or keywords, newest first. No dates means the last 7 days.
 
-    Pass both dates or neither; tools._optional_range is what validates model-supplied dates.
+    Pass both dates or neither; tools._optional_range validates model-supplied dates.
     """
     q = (query or "").strip()
     if not q:
@@ -285,8 +271,6 @@ def cik_for(symbol: str) -> int:
     return cik
 
 
-
-
 def filings(symbol: str, start: date | None = None, end: date | None = None, limit: int = 20) -> list[dict]:
     """SEC 8-K (events), 10-K and 10-Q for a US-listed company, newest first. No dates means the latest.
 
@@ -317,8 +301,6 @@ def filings(symbol: str, start: date | None = None, end: date | None = None, lim
         if len(out) == limit:
             break
     return out
-
-
 
 
 @functools.cache

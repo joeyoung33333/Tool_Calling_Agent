@@ -1,21 +1,18 @@
 """Backtest one pair trade on daily bars, in-sample then on data it was not fitted on.
 
-The whole point of this module is to be hard to fool. A pair screen looks at hundreds of
-combinations and reports the best, which is exactly the setup that manufactures false positives, so
-every design choice here costs the strategy something:
+A screen looks at hundreds of combinations and reports the best, which is the setup that
+manufactures false positives. So every choice here costs the strategy something:
 
-- **Frozen parameters.** The hedge ratio and the spread's mean and sd are fitted on the in-sample
-  window only, and the holdout is scored with those same numbers. Refitting on the holdout would
-  make every pair look stationary, because it would be measuring the holdout against itself.
-- **Next-open fills.** A signal computed from today's close is filled at tomorrow's open. Filling at
-  the close you just used to decide is the most common way a pairs backtest invents returns.
-- **Costs always on.** Commission in basis points per leg per fill, plus borrow on the short leg for
-  every session held. Zero-cost pairs trading looks profitable almost everywhere.
-- **Trials correction.** `deflated_sharpe()` haircuts a Sharpe by how many pairs were examined to
-  find it. The screen counts those trials in code, so the number cannot be talked down.
+- **Frozen parameters.** Beta and the spread's mean and sd come from the in-sample window only, and
+  the holdout is scored with those same numbers. Refitting would measure the holdout against itself.
+- **Next-open fills.** A signal from today's close is filled at tomorrow's open. Filling at the
+  close you just used to decide is the commonest way a pairs backtest invents returns.
+- **Costs always on.** Commission per leg per fill, plus borrow on the short leg per session held.
+- **Trials correction.** `deflated_sharpe()` haircuts a Sharpe by how many pairs were searched, and
+  the screen counts those trials in code so the number cannot be talked down.
 
-Returns are price returns: the bars are split-adjusted but carry no dividends, which flatters a
-short leg and penalises a long one. Stated in the output rather than silently ignored.
+Returns are price returns: split-adjusted bars with no dividends, which flatters a short leg. Said
+in the output rather than silently ignored.
 """
 
 import math
@@ -25,17 +22,25 @@ from dataclasses import dataclass, field
 from typing import NamedTuple
 
 import config
-import pairs
+from quant import pairs
 
 TRADING_DAYS = pairs.TRADING_DAYS
+
+# What the method excludes, stated on every result including a refusal. Constant because it
+# describes the method, not the data: a caller that has any result can disclose it, and the agents
+# are told to read it from here rather than carry their own copy in a prompt.
+LIMITATIONS = (
+    "Price returns only: bars are split-adjusted but exclude dividends. Fills are at the "
+    "next session's open with no slippage or market impact modelled."
+)
 
 
 @dataclass
 class Rules:
-    """Entry and exit thresholds, and costs. Every value is adjustable; these are the defaults.
+    """Entry and exit thresholds, and costs. Adjustable per request; these are the defaults.
 
-    Entry and exit matter most: a tight exit trades often and flatters the equity curve, a loose one
-    is more honest about how long a divergence really takes to close.
+    Entry and exit matter most: a tight exit trades often and flatters the curve, a loose one is
+    more honest about how long a divergence really takes to close.
     """
 
     entry_z: float = config.ENTRY_Z  # open when the spread is this many sd from its in-sample mean
@@ -49,9 +54,8 @@ class Rules:
     def __post_init__(self) -> None:
         """Reject thresholds that would quietly produce a meaningless backtest.
 
-        These arrive from the model, so an inverted band has to fail loudly. With exit_z above
-        entry_z every trade satisfies its exit on the session after it opens, which reports a busy
-        strategy whose entire P&L is round-trip commission.
+        These arrive from the model, and with exit_z above entry_z every trade exits the session
+        after it opens, reporting a busy strategy whose entire P&L is round-trip commission.
         """
         if not 0.0 <= self.exit_z < self.entry_z < self.stop_z:
             raise ValueError(
@@ -89,17 +93,13 @@ class Trade:
     exit_z: float
     sessions: int
     pnl: float  # dollars, on one share of A against beta shares of B
-    return_pct: float  # that P&L per dollar of capital committed at entry, which is the comparable figure
+    return_pct: float  # that P&L per dollar committed at entry, which is the comparable figure
     costs: float
     reason: str  # 'target', 'stop', 'max_hold' or 'end_of_data'
 
 
 class _Open(NamedTuple):
-    """The live position: where it was entered and the equity level it was opened from.
-
-    A NamedTuple rather than a bare tuple because `run()` reads six of these fields across forty
-    lines, and `entry[5]` is unreadable where `entry.spread` is not.
-    """
+    """The live position: where it was entered and the equity level it was opened from."""
 
     date: str
     index: int
@@ -114,10 +114,9 @@ class _Open(NamedTuple):
 class Result:
     """What one window produced.
 
-    `equity` is a cumulative *return* series: each trade's P&L divided by the capital that trade
-    committed, accumulated. It must be a return and not a dollar total, because dividing a running
-    dollar P&L by a notional that is re-measured every session makes the curve move on days with no
-    position open - which silently rewrites every Sharpe, drawdown and total return built from it.
+    `equity` is a cumulative *return*: each trade's P&L over the capital that trade committed. A
+    dollar total divided by a notional re-measured each session would move the curve on days with
+    no position open, silently rewriting every Sharpe and drawdown built from it.
     """
 
     label: str
@@ -154,14 +153,13 @@ def run(
 ) -> Result:
     """Trade this window using `model`'s frozen parameters.
 
-    Decisions use closes; fills use the *next* session's opens, so the last bar can only ever close
-    a trade, never open one. Capital is the gross notional at entry, so a return is per dollar
-    actually committed to both legs.
+    Decisions use closes, fills the *next* session's opens, so the last bar can only close a trade.
+    Capital is the gross notional at entry, so a return is per dollar committed to both legs.
     """
     result = Result(label, dates[0], dates[-1], len(dates))
     beta, mean, sd = model.beta, model.mean, model.sd
     side, entry = 0, None
-    cumulative = 0.0  # cumulative RETURN, not dollars - see the equity note below
+    cumulative = 0.0  # a cumulative RETURN, not dollars - see Result.equity
     armed = True  # cleared by a stop or a timeout, so a broken spread is not re-entered every session
 
     for i, date in enumerate(dates):
@@ -199,9 +197,9 @@ def run(
                 cumulative = entry.equity_before + pnl / entry.capital
                 equity = cumulative
                 side, entry = 0, None
-                # A stop or a timeout both mean the spread did not behave as the fit described. Wait
-                # for it to come back inside the exit band before trading it again; otherwise a
-                # spread that simply sits at |z| = 3 is re-entered forever, paying costs each time.
+                # A stop or a timeout means the spread did not behave as the fit described, so wait
+                # for it inside the exit band before trading it again. Otherwise a spread sitting at
+                # |z| = 3 is re-entered every session, paying costs each time.
                 armed = reason not in ("stop", "max_hold")
 
         else:
@@ -245,14 +243,9 @@ def _borrow(beta: float, px_b: float, px_a: float, side: int, rules: Rules) -> f
 def metrics(result: Result) -> dict:
     """Headline figures for one window.
 
-    No risk-free deduction. A pair trade is long one leg and short the other, so it ties up no net
-    capital and is self-financing; the cost of the short leg is already charged explicitly as borrow.
-    Subtracting a daily risk-free rate on top would charge the strategy twice, and because these
-    rules sit flat most of the time it would charge carry on every session the position was closed.
-    Measured: on SPY/IVV the deduction alone turned a 2.2%-exposure holdout into a Sharpe of -25.
-
-    `exposure_pct` is published next to the Sharpe for that reason - a Sharpe annualized from a
-    return series that is zero 98% of the time is arithmetic, not evidence.
+    Deliberately no risk-free deduction: the short leg is already charged as borrow, so carry would
+    charge it twice, on every flat session. `exposure_pct` sits beside the Sharpe because one
+    annualized from a mostly-zero series is not evidence.
     """
     trades, daily = result.trades, result.daily
     wins = [t for t in trades if t.pnl > 0]
@@ -285,11 +278,9 @@ def metrics(result: Result) -> dict:
 def sharpe_haircut(trials: int, sessions: int) -> float | None:
     """The annualized Sharpe the luckiest of `trials` worthless strategies would post over `sessions`.
 
-    The expected maximum of N independent standard normals is about sqrt(2*ln N); dividing by
-    sqrt(sessions) turns that into the sampling error of a Sharpe estimate and sqrt(252) annualizes
-    it. Grows with the search and shrinks with the sample, so it is the price of screening widely on
-    short history - and it is reported next to the deflated figure because a haircut of 3 means the
-    holdout is too short to prove anything, which is a statement about the sample, not the pair.
+    sqrt(2*ln N) is the expected maximum of N standard normals; over sqrt(sessions) it becomes the
+    sampling error of a Sharpe estimate, annualized by sqrt(252). Reported beside the deflated
+    figure, because a haircut of 3 says the holdout is too short to prove anything either way.
     """
     if trials < 2 or sessions < 30:
         return None
@@ -314,13 +305,14 @@ def evaluate(
 ) -> dict:
     """Fit in-sample, trade both windows, and report them side by side.
 
-    The holdout row is the one that matters: same parameters, data the fit never saw. A pair that is
-    strong in-sample and flat out-of-sample has been fitted, not discovered.
+    The holdout row is the one that matters: same parameters, data the fit never saw. A pair strong
+    in-sample and flat out-of-sample was fitted, not discovered.
     """
     rules = rules or Rules()
     dates, a_bars, b_bars = pairs.align_bars(a_history, b_history)
-    if len(dates) < 120:
-        raise ValueError(f"only {len(dates)} overlapping sessions; at least 120 are needed to split a window")
+    if len(dates) < config.MIN_BACKTEST_SESSIONS:
+        raise ValueError(f"only {len(dates)} overlapping sessions; at least "
+                         f"{config.MIN_BACKTEST_SESSIONS} are needed to split a window")
     cut = split(dates, rules)
     closes = lambda bars: [bar["close"] for bar in bars]  # noqa: E731 - local alias, reads better inline
     model = fit(dates[:cut], closes(a_bars[:cut]), closes(b_bars[:cut]))
@@ -333,6 +325,7 @@ def evaluate(
             "reason": problem,
             "fit": {"hedge_ratio": round(model.beta, 4),
                     "fitted_on": f"{model.start} to {model.end} ({model.sessions} sessions)"},
+            "limitations": LIMITATIONS,
         }
 
     in_sample = run("in_sample", dates[:cut], a_bars[:cut], b_bars[:cut], model, rules)
@@ -340,11 +333,16 @@ def evaluate(
     in_metrics, out_metrics = metrics(in_sample), metrics(holdout)
     out_metrics["deflated_sharpe"] = deflated_sharpe(out_metrics["sharpe"], trials, holdout.sessions)
     out_metrics["sharpe_haircut"] = sharpe_haircut(trials, holdout.sessions)
+    # Below two trials there is no search to deflate for and both figures are None, so the formula
+    # would read "the luckiest of 1 searched pairs" beside two nulls. analyze_pair always lands here.
     out_metrics["deflation_note"] = (
         f"deflated_sharpe = sharpe - sharpe_haircut, where the haircut is what the luckiest of "
         f"{trials} searched pairs would post by chance over {holdout.sessions} sessions. A haircut "
         f"above about 2.5 means this holdout is too short to prove anything at this search width, "
         f"so a negative deflated figure is evidence about the sample, not proof the pair is bad."
+    ) if out_metrics["sharpe_haircut"] is not None else (
+        "deflated_sharpe and sharpe_haircut are null because only this pair was tested, so there is "
+        "no search width to deflate for. Quote sharpe and say it was not deflated."
     )
 
     return {
@@ -360,10 +358,6 @@ def evaluate(
         "in_sample": in_metrics,
         "holdout": out_metrics,
         "trades": [vars(t) for t in holdout.trades],
-        "equity": {"in_sample": in_sample.equity, "holdout": holdout.equity},
         "trials_considered": trials,
-        "limitations": (
-            "Price returns only: bars are split-adjusted but exclude dividends. Fills are at the "
-            "next session's open with no slippage or market impact modelled."
-        ),
+        "limitations": LIMITATIONS,
     }

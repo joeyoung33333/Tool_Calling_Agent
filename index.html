@@ -15,6 +15,12 @@
                 --line: #5c4000;
                 --red: #ff4d4d;
                 --green: #00d26a;
+                /* One colour per agent, so a run reads at a glance. Amber is the Lead because it
+                   is the house colour and the Lead owns the run; the rest are distinguishable on
+                   black without competing with it. */
+                --ag-lead: #ffb000;
+                --ag-writer: #5ab0ff;
+                --ag-analyst: #c08bff;
                 --hover: #1a1200; /* the highlight under a hovered row or button */
                 --panel: #0d0900; /* tool-call rows */
                 --glow: rgba(255, 176, 0, 0.18);
@@ -132,44 +138,295 @@
                 border-left: 1px solid rgba(0, 0, 0, 0.4);
             }
 
-            /* What this agent explores, who it is for, and how to drive it. Stated on the page
-               rather than only in the README: a reader who lands here should not have to guess. */
-            #about {
-                display: grid;
-                grid-template-columns: 5.5rem 1fr;
-                gap: 0.2rem 0.75rem;
-                padding: 0.6rem 0.9rem;
-                margin-bottom: 0.6rem;
-                font-size: 0.75rem;
-                line-height: 1.45;
+            /* One panel per run. Each row is a tool call drawn to scale and expandable, so a
+               fan-out of twenty calls reads as one block rather than twenty stacked rows. */
+            div.runpanel {
+                padding: 0.5rem 0.75rem;
+                font-size: 0.7rem;
                 color: var(--dim);
                 background: var(--panel);
                 border: 1px solid var(--line);
                 border-left: 3px solid var(--amber);
                 border-radius: 0 6px 6px 0;
             }
-            #about dt {
+            div.runpanel .rp-head {
+                display: flex;
+                flex-wrap: wrap;
+                gap: 0.5rem 1rem;
+                align-items: baseline;
                 color: var(--amber);
                 font-weight: 700;
                 letter-spacing: 0.1em;
                 font-size: 0.65rem;
-                padding-top: 0.1rem;
+                margin-bottom: 0.45rem;
             }
-            #about dd {
-                margin: 0;
+            div.runpanel .rp-head .rp-note {
+                color: var(--faint);
+                font-weight: 400;
+                letter-spacing: 0;
             }
-            #about b {
-                color: var(--muted);
+            details.rp-row {
+                margin-bottom: 2px;
+            }
+            details.rp-row > summary::-webkit-details-marker {
+                display: none;
+            }
+            details.rp-row > summary:hover {
+                background: var(--hover);
+            }
+            /* Unscoped on purpose: these style BOTH an agent row (.rp-group) and a tool row
+               (.rp-row). Scoped to .rp-row, an agent's bar got no position or height and
+               simply did not draw - which is why the Clarifier and the Lead had no bars. */
+            .rp-name {
+                overflow: hidden;
+                text-overflow: ellipsis;
+                white-space: nowrap;
+            }
+            .rp-track {
+                position: relative;
+                height: 0.75rem;
+                background: linear-gradient(var(--line), var(--line)) left center / 100% 1px no-repeat;
+            }
+            .rp-bar {
+                position: absolute;
+                top: 0;
+                height: 100%;
+                min-width: 2px;
+                border-radius: 2px;
+                background: var(--muted);
+            }
+            .rp-dur {
+                text-align: right;
+                color: var(--faint);
+            }
+            details.rp-row > pre {
+                margin: 0.3rem 0 0.5rem 0;
+                padding: 0.5rem;
+                background: #000;
+                border: 1px solid var(--line);
+                border-radius: 4px;
+                max-height: 18rem;
+                overflow: auto;
+                white-space: pre-wrap;
+                word-break: break-word;
+                font-size: 0.68rem;
+            }
+            /* Agent colours, applied to both the bar and its label. */
+            /* A group is one agent; its rows are that agent's tool calls, indented under it. */
+            details.rp-group { margin: 0; }
+            /* Agent rows and tool rows share one grid, so the name, the bar and the duration line
+               up at every depth. Indentation lives on the name cell: putting it on the row would
+               shift the grid itself and the columns would stop agreeing. */
+            details.rp-group > summary,
+            details.rp-row > summary {
+                display: grid;
+                grid-template-columns: var(--rp-name-w) 1fr var(--rp-dur-w);
+                gap: 0.5rem; align-items: center;
+                cursor: pointer; list-style: none;
+                padding: 2px 8px; border-radius: 3px;
+            }
+            details.rp-group > summary { border-top: 1px solid var(--line); }
+            div.runpanel { --rp-name-w: 15rem; --rp-dur-w: 3.4rem; }
+            @media (max-width: 620px) { div.runpanel { --rp-name-w: 9.5rem; --rp-dur-w: 3rem; } }
+            details.rp-group > summary::-webkit-details-marker { display: none; }
+            .rp-name::before {
+                content: "\25b8"; color: var(--dim); font-size: 10px;
+                display: inline-block; width: 11px; transition: transform .12s;
+            }
+            /* An agent with no tool calls has nothing behind its caret, so it does not get one. */
+            .rp-leaf > summary .rp-name::before { content: ""; }
+            .rp-leaf > summary { cursor: default; }
+            details[open] > summary .rp-name::before { transform: rotate(90deg); }
+            /* An agent carries its colour swatch and its name in its own colour; a tool call is
+               dimmer and unmarked. The difference should be readable at a glance, not by reading. */
+            .rp-is-agent { font-weight: 600; }
+            .rp-is-agent .rp-dot { margin-right: 6px; vertical-align: 1px; }
+            .rp-is-tool { color: var(--muted) !important; font-weight: 400; }
+            .rp-is-tool .rp-tool { color: var(--muted); }
+            details.rp-group > summary:hover { background: var(--hover); }
+            .rp-name { padding-left: calc(var(--depth, 0) * 15px); }
+            details.rp-row > pre { margin-left: calc(var(--depth, 0) * 15px); }
+            .rp-sql { margin-left: calc(8px + var(--depth, 0) * 15px); }
+            .rp-tool { font-weight: 600; }
+
+            /* The axis sits on the same grid, so a tick is directly above the bars it labels. */
+            .rp-axis {
+                display: grid; grid-template-columns: var(--rp-name-w) 1fr var(--rp-dur-w);
+                gap: 0.5rem; padding: 0 8px 3px; font-size: 9px; color: var(--dim);
+            }
+            .rp-axis-track { position: relative; height: 11px; border-bottom: 1px solid var(--line); }
+            .rp-tick { position: absolute; top: 0; white-space: nowrap; }
+            .rp-tick::after {
+                content: ""; position: absolute; left: 0; top: 11px; width: 1px; height: 3px;
+                background: var(--line);
+            }
+            /* The end labels are nudged inward to stay in bounds, but the mark must not move with
+               them or it points ~2% of the run away from the time it names. The mark is its own
+               element, positioned on the true offset; only the label shifts. */
+            .rp-tick:first-child .rp-tick-label { transform: none; }
+            .rp-tick:last-child .rp-tick-label { transform: translateX(-100%); }
+            .rp-tick-label { display: inline-block; transform: translateX(-50%); }
+            .rp-agent { font-weight: 600; }
+            .rp-count { color: var(--dim); font-size: 10px; margin-left: 6px; }
+
+            .rp-legend {
+                display: flex; flex-wrap: wrap; gap: 4px 14px;
+                padding: 5px 8px; border-top: 1px solid var(--line);
+                font-size: 10px; color: var(--muted);
+            }
+            .rp-key { display: inline-flex; align-items: center; gap: 5px; cursor: help; }
+            .rp-dot {
+                width: 8px; height: 8px; border-radius: 2px; display: inline-block;
+                background: var(--muted);  /* a swatch with no class must still be visible */
+            }
+            /* A researcher's row takes its own ag-rN shade from the shade map, so this class only
+               ever reaches a chart tab or byline. Purple, not green: green means a positive return
+               in every number on this page, so a green agent would read as a verdict. */
+            .rp-dot.ag-researcher { background: #c08bff; }
+
+            .chart-tabs, .chart-solo { border: 1px solid var(--line); border-radius: 3px; margin-bottom: 12px; padding-bottom: 2px; }
+            .chart-kind {
+                font-size: 9px; letter-spacing: .1em; color: var(--dim);
+                padding: 6px 9px 0;
+            }
+            .chart-solo .chart { border: none; margin: 4px auto 0; }
+            .chart-solo .chart-by { margin: 2px 0 6px 9px; }
+            .chart-tabbar { display: flex; flex-wrap: wrap; gap: 2px; padding: 4px; border-bottom: 1px solid var(--line); }
+            .chart-tab {
+                display: inline-flex; align-items: center; gap: 5px;
+                background: transparent; color: var(--dim); border: 1px solid transparent;
+                border-radius: 3px; padding: 3px 8px; font: inherit; font-size: 10px; cursor: pointer;
+            }
+            .chart-tab:hover { color: var(--muted); }
+            .chart-tab.on { color: var(--amber); border-color: var(--line); background: var(--panel); }
+            .chart-pane { display: none; padding: 6px; }
+            .chart-pane.on { display: block; }
+            .chart-tabs .chart { margin: 0; }
+
+            .chart-by {
+                display: flex; align-items: center; gap: 6px;
+                font-size: 10px; color: var(--dim); margin: -6px 0 10px 2px; cursor: help;
+            }
+
+            .rp-raw > summary {
+                list-style: none; cursor: pointer; font-size: 9px; color: var(--dim);
+                padding: 3px 0 3px calc(8px + var(--depth, 0) * 15px);
+            }
+            .rp-raw > summary::-webkit-details-marker { display: none; }
+            .rp-raw > summary::before { content: "\25b8 "; }
+            .rp-raw[open] > summary::before { content: "\25be "; }
+
+            .rp-sql { margin-right: 8px; margin-bottom: 6px; }
+            .rp-sql-head { font-size: 9px; letter-spacing: .08em; color: var(--dim); padding: 4px 0 2px; }
+            .rp-sql pre {
+                margin: 0; padding: 7px 9px; white-space: pre-wrap; word-break: break-word;
+                background: var(--panel); border: 1px solid var(--amber); border-radius: 3px;
+                color: var(--amber); font-size: 11px; line-height: 1.5;
+            }
+
+            /* Four researcher shades, so two concurrent researchers are told apart at a glance. */
+            /* Purple shades, not green: green and red mean a positive and negative return in every
+               number on this page, so a green agent reads as a verdict. */
+            .ag-r1 .rp-bar, .rp-bar.ag-r1, .rp-dot.ag-r1 { background: #c08bff; }
+            .ag-r2 .rp-bar, .rp-bar.ag-r2, .rp-dot.ag-r2 { background: #9a6bdd; }
+            .ag-r3 .rp-bar, .rp-bar.ag-r3, .rp-dot.ag-r3 { background: #d9b3ff; }
+            .ag-r4 .rp-bar, .rp-bar.ag-r4, .rp-dot.ag-r4 { background: #7b4fc0; }
+            .rp-name.ag-r1 { color: #c08bff; }
+            .rp-name.ag-r2 { color: #9a6bdd; }
+            .rp-name.ag-r3 { color: #d9b3ff; }
+            .rp-name.ag-r4 { color: #7b4fc0; }
+            .ag-clarifier .rp-bar, .rp-bar.ag-clarifier, .rp-dot.ag-clarifier { background: #ff8a3d; }
+            .rp-name.ag-clarifier { color: #ff8a3d; }
+            .rp-dot.ag-lead { background: var(--ag-lead); }
+            .rp-dot.ag-writer { background: var(--ag-writer); }
+            .rp-dot.ag-analyst { background: var(--ag-analyst); }
+
+            /* The purpose block and the example picker, both inside the first message. */
+            .intro-about { border: 1px solid var(--line); border-radius: 3px; padding: 9px 11px; margin-bottom: 12px; }
+            .intro-title { font-size: 10px; letter-spacing: .1em; color: var(--amber); margin-bottom: 6px; }
+            .intro-row { display: flex; gap: 10px; margin-bottom: 5px; font-size: 11px; line-height: 1.55; }
+            .intro-row:last-child { margin-bottom: 0; }
+            .intro-dt { flex: none; width: 74px; color: var(--dim); font-size: 9px; letter-spacing: .07em; padding-top: 2px; }
+            .intro-dd { color: var(--muted); }
+            .intro-dd b { color: var(--amber); font-weight: 600; }
+            .intro-about > summary { cursor: pointer; list-style: none; }
+            .intro-about > summary::-webkit-details-marker { display: none; }
+            .intro-about > summary::before {
+                content: "\25b8"; color: var(--amber); font-size: 11px;
+                display: inline-block; width: 15px; transition: transform .12s;
+            }
+            .intro-about[open] > summary::before { transform: rotate(90deg); }
+            .intro-title {
+                border-bottom: 1px solid var(--line);
+                padding-bottom: 5px; margin-bottom: 7px;
+            }
+            .intro-lead { font-size: 11px; color: var(--muted); line-height: 1.5; margin-bottom: 9px; }
+            .intro-cat { border: 1px solid var(--line); border-radius: 3px; margin-bottom: 5px; }
+            .intro-cat-head {
+                display: flex; align-items: center; gap: 5px; cursor: pointer; list-style: none;
+                padding: 6px 8px; font-size: 12px; font-weight: 600; color: var(--amber);
+            }
+            .intro-cat-head::-webkit-details-marker { display: none; }
+            .intro-cat-head::before {
+                content: "\25b8"; color: var(--amber); font-size: 11px;
+                display: inline-block; width: 13px; transition: transform .12s;
+            }
+            .intro-cat[open] .intro-cat-head::before { transform: rotate(90deg); }
+            .intro-cat[open] .intro-cat-head { border-bottom: 1px solid var(--line); }
+            .intro-cat-n { color: var(--dim); font-size: 9px; margin-left: auto; }
+            /* The examples sit in a padded wrapper and fill it. Two earlier attempts got this
+               wrong: `calc(100% - 14px)` resolved against a box wider than the category and
+               overflowed by 6px, and `width: auto` on a <button> is shrink-to-fit, which left them
+               550px short. A padded parent plus `width: 100%` cannot be wrong either way.
+               No rule between examples: each is already a bordered box. The category name is
+               larger than the examples under it, which is the order a reader scans them. */
+            .intro-items { padding: 6px 7px; display: flex; flex-direction: column; gap: 5px; }
+            .intro .intro-cat button {
+                display: block; width: 100%; margin: 0;
+                text-align: left; font-size: 10px; line-height: 1.45; padding: 5px 8px;
+            }
+            @media (max-width: 620px) {
+                .intro-row { flex-direction: column; gap: 1px; }
+                .intro-dt { width: auto; }
+            }
+
+            .ag-lead .rp-bar, .rp-bar.ag-lead { background: var(--ag-lead); }
+            .ag-writer .rp-bar, .rp-bar.ag-writer { background: var(--ag-writer); }
+            .ag-analyst .rp-bar, .rp-bar.ag-analyst { background: var(--ag-analyst); }
+            .rp-name.ag-lead { color: var(--ag-lead); }
+            .rp-name.ag-writer { color: var(--ag-writer); }
+            .rp-name.ag-analyst { color: var(--ag-analyst); }
+            /* No per-row-kind grid here. A rule scoped to .rp-row set its own columns and left the
+               agent rows and the axis on the shared ones, so on a phone every tool call was drawn
+               against a track 128px further left and 1.5x wider than its own parent's. The phone
+               layout changes the variables (above), which every row and the axis read. */
+
+            /* An inline [F1.2.1] citation. Hovering shows the finding behind it, so the evidence
+               list underneath can stay collapsed without the citation becoming opaque. */
+            .cite {
+                color: var(--amber);
+                cursor: help;
+                border-bottom: 1px dotted var(--line);
+                font-size: 0.85em;
+            }
+            details.evidence {
+                margin-top: 0.5rem;
+                font-size: 0.75rem;
+                color: var(--dim);
+            }
+            details.evidence > summary {
+                cursor: pointer;
+                color: var(--amber);
                 font-weight: 700;
+                letter-spacing: 0.1em;
+                font-size: 0.65rem;
             }
-            @media (max-width: 640px) {
-                #about {
-                    grid-template-columns: 1fr;
-                    gap: 0.1rem;
-                }
-                #about dt {
-                    padding-top: 0.4rem;
-                }
+            details.evidence ul {
+                margin: 0.35rem 0 0 0;
+                padding-left: 1.1rem;
+            }
+            details.evidence li {
+                margin-bottom: 0.15rem;
             }
 
             /* Buttons: outlined by default (example queries); .solid is the amber action button */
@@ -209,6 +466,11 @@
                 letter-spacing: 0.08em;
                 text-transform: uppercase;
                 box-shadow: 0 3px 0 var(--shade);
+            }
+            button.stopping, button.solid.stopping {
+                background: transparent;
+                color: var(--red);
+                border-color: var(--red);
             }
             button.solid:hover:not(:disabled) {
                 transform: translateY(-2px);
@@ -340,8 +602,7 @@
             /* New rows ease in */
             .intro,
             .msg,
-            details.tool,
-            div.run,
+            div.runpanel,
             div.chart {
                 animation: rise 0.25s ease-out backwards; /* backwards only: a held end state would block the hover transforms */
             }
@@ -358,8 +619,7 @@
                 color: #e8e8e8;
                 border-left: 3px solid var(--amber);
             }
-            .msg,
-            details.tool pre {
+            .msg {
                 white-space: pre-wrap;
                 word-break: break-word;
             }
@@ -426,107 +686,6 @@
                 transform: translateX(3px);
             }
 
-            /* The fan-out, drawn to scale. Overlapping bars are the whole point: they are what
-               shows several researchers ran at once rather than one after another. */
-            div.timeline {
-                padding: 0.5rem 0.75rem;
-                font-size: 0.7rem;
-                color: var(--dim);
-                background: var(--panel);
-                border: 1px solid var(--line);
-                border-left: 3px solid var(--amber);
-                border-radius: 0 6px 6px 0;
-            }
-            div.timeline .tl-head {
-                color: var(--amber);
-                font-weight: 700;
-                letter-spacing: 0.12em;
-                font-size: 0.65rem;
-                margin-bottom: 0.4rem;
-            }
-            div.timeline .tl-row {
-                display: grid;
-                grid-template-columns: 11rem 1fr 3.2rem;
-                gap: 0.5rem;
-                align-items: center;
-                margin-bottom: 2px;
-            }
-            div.timeline .tl-name {
-                overflow: hidden;
-                text-overflow: ellipsis;
-                white-space: nowrap;
-            }
-            div.timeline .tl-track {
-                position: relative;
-                height: 0.75rem;
-                background: linear-gradient(var(--line), var(--line)) left center / 100% 1px no-repeat;
-            }
-            div.timeline .tl-bar {
-                position: absolute;
-                top: 0;
-                height: 100%;
-                min-width: 2px;
-                background: var(--muted);
-                border-radius: 2px;
-            }
-            div.timeline .tl-bar.lead { background: var(--amber); }
-            div.timeline .tl-bar.researcher { background: var(--green); }
-            div.timeline .tl-dur {
-                text-align: right;
-                color: var(--faint);
-            }
-            div.timeline .tl-note {
-                margin-top: 0.4rem;
-                color: var(--faint);
-            }
-            details.tool,
-            div.run {
-                padding: 0.4rem 0.75rem;
-                font-size: 0.75rem;
-                color: var(--dim);
-                background: var(--panel);
-                border: 1px solid var(--line);
-                border-left: 3px solid var(--amber);
-                border-radius: 0 6px 6px 0;
-                transition: background 0.15s, border-color 0.15s, transform 0.15s;
-            }
-            details.tool:hover {
-                background: var(--hover);
-                border-color: var(--amber);
-                transform: translateX(3px);
-            }
-            details.tool summary {
-                cursor: pointer;
-                color: var(--amber);
-            }
-            details.tool summary:hover {
-                color: #fff;
-            }
-            details.tool summary b,
-            div.run b {
-                margin-right: 0.6rem;
-                letter-spacing: 0.1em;
-                color: var(--dim);
-            }
-            div.run {
-                color: var(--amber);
-            }
-            div.run b:not(:first-child) {
-                margin-left: 1.5rem;
-            }
-            details.tool summary::after {
-                content: "click to show result";
-                float: right;
-                font-style: italic;
-                color: var(--dim);
-            }
-            details.tool[open] summary::after {
-                content: "click to hide result";
-            }
-            details.tool pre {
-                margin-top: 0.4rem;
-                color: #b8b8b8;
-            }
             div.chart {
                 width: 100%;
                 max-width: 720px;
@@ -605,8 +764,7 @@
                 #tape .track,
                 .intro,
                 .msg,
-                details.tool,
-                div.run,
+                div.runpanel,
                 div.chart,
                 .msg.loading .content::after {
                     animation: none;
@@ -661,28 +819,6 @@
                 <span class="tagline">Deep research agent for US equity and ETF pair trades</span>
                 <button class="solid" id="new-btn">New session</button>
             </header>
-            <dl id="about">
-                <dt>EXPLORES</dt>
-                <dd>
-                    Every possible pair among <b>625 US instruments</b> — the S&amp;P 500 plus 122 curated
-                    ETFs — over three years of daily prices. For each pair it measures whether the two
-                    move together, drift apart, then <b>converge</b>, then backtests the best candidates
-                    on data they were <b>not</b> chosen on.
-                </dd>
-                <dt>FOR</dt>
-                <dd>
-                    Anyone weighing a statistical pair trade who wants the <b>evidence and its limits</b>
-                    rather than a recommendation: analysts, quant students, and traders checking whether a
-                    pair survives costs and a holdout. Research only — never advice.
-                </dd>
-                <dt>HOW TO USE</dt>
-                <dd>
-                    Name a <b>sector</b> ("energy"), an <b>ETF family</b> ("nasdaq_leveraged"), or
-                    <b>two tickers</b> ("LMT and RTX"). Broad questions fan out to researchers working in
-                    parallel — their timeline, the charts and the <b>evidence behind every number</b>
-                    appear with the answer. Ask a follow-up and the conversation carries over.
-                </dd>
-            </dl>
             <div id="tape"></div>
             <div id="settings">
                 <label data-tip="Speed of the scrolling price tape. Off stops it; you can then scroll it by hand.">Tape <select id="tape-speed"></select></label>
@@ -711,10 +847,56 @@
             const tape = document.getElementById("tape");
             let sessionId = null;
 
-            const EXAMPLES = [
-                "What was SPY's return and realized volatility over the last year?",
-                "How risky is NVDA against SPY over the last two years?",
-                "Chart AAPL's price over the last 6 months.",
+            // Grouped by what each one exercises, so a first-time visitor can reach the
+            // interesting parts deliberately. The first three are the README's sample queries.
+            // [query, tags, what it does]. One clear use case per capability, chosen so the ten
+            // between them call all nine tools and show both routes. Symbols are names the class
+            // will recognise. Three of these are the README's required sample queries and must
+            // keep their exact wording: the energy screen, LMT/RTX, and the ETF count.
+            const EXAMPLE_GROUPS = [
+                ["Parallel research", [
+                    ["Which pairs in the energy sector are viable pair trades?",
+                     ["fans out \u2192 3-4 researchers", "screen_pairs", "holdout backtest",
+                      "NEGATIVE result: nothing survives"],
+                     "The Lead splits the sector into briefs that researchers work at the same time. screen_pairs fits every pair in Python, ranks them, and backtests the best on data they were not chosen on. Every pair comes back with a negative holdout Sharpe, so the answer is a well-evidenced \"no\" rather than a pick."],
+                    ["Screen the nasdaq_leveraged ETF family for viable pairs.",
+                     ["fans out", "screen_pairs", "ETF family universe",
+                      "POSITIVE result: pairs survive the gates"],
+                     "The counterpart to the energy screen, on the same machinery. An ETF family rather than a GICS sector \u2014 resolve_universe handles sector, sub-industry, family or an explicit list. Four pairs clear the gates here and QLD/TQQQ posts a positive holdout Sharpe on a profitable return, though its deflated Sharpe stays negative once the search width is charged for. Run both to watch the screen say yes and no on the same evidence."],
+                    ["Compare information technology and financials: which sector has better pairs?",
+                     ["fans out \u2192 2 sectors at once", "screen_pairs \u00d72", "capped universe"],
+                     "Two sectors screened concurrently and weighed against each other. Both hold 76 names against a 40-name cap, so watch it report a subset rather than claiming it covered the sector."],
+                    ["Which energy pairs diverged the most, and what caused those divergences?",
+                     ["fans out \u2192 3-4 researchers", "screen_pairs", "research_divergence", "get_news", "get_filings", "~1-2 min"],
+                     "The heaviest question here: screen the sector, find the widest divergences that lasted, then read news and SEC filings over exactly those windows to say whether each gap closed or the relationship broke."],
+                ]],
+                ["Sequential research", [
+                    ["Is LMT a good pair trade with RTX?",
+                     ["single analyst, no fan-out", "analyze_pair", "z-score chart"],
+                     "Answered directly in seconds by one analyst. analyze_pair returns the hedge ratio, half-life, a holdout backtest and a z-score chart with its entry and exit bands."],
+                    ["What explains the biggest recent divergence between GS and MS?",
+                     ["single analyst", "analyze_pair", "research_divergence", "news + filings"],
+                     "Goldman Sachs against Morgan Stanley. analyze_pair finds the divergence episodes, then research_divergence pulls news and SEC filings over exactly that window."],
+                ]],
+                ["Text2SQL", [
+                    ["How many ETFs are in the reference database, and which ETF families are covered?",
+                     ["single analyst", "get_reference_schema", "query_reference"],
+                     "Reads the columns and their real values, then writes and runs its own SELECT. The query it wrote is shown with the answer."],
+                    ["Which S&P 500 sub-industries have at least 8 companies?",
+                     ["single analyst", "query_reference", "GROUP BY / HAVING"],
+                     "A query the agent composes itself against a read-only connection that refuses writes, file access and DuckDB's own catalog."],
+                ]],
+                ["Tool calls", [
+                    ["Chart AAPL's price over the last 6 months.",
+                     ["single analyst", "get_chart"],
+                     "get_chart draws an interactive line chart. get_price_history returns numbers, so a request to see something routes here instead."],
+                    ["How volatile has NVDA been over the past year?",
+                     ["single analyst", "get_price_history", "month-end table"],
+                     "Annualized realized volatility, period return, high and low from Cboe daily bars, with a month-end price table."],
+                    ["What news and SEC filings came out for TSLA this month?",
+                     ["single analyst", "get_news", "get_filings"],
+                     "Headlines plus 8-K item codes, 10-Ks and 10-Qs. An item code says what actually happened, which beats a headline."],
+                ]],
             ];
 
             // Create an element with an optional class and text. textContent keeps model output from being parsed as HTML.
@@ -815,18 +997,73 @@
                 tape.replaceChildren(track);
             }
 
+            // The purpose block lives here rather than in the header: it is worth reading once, and
+            // as the first message it scrolls away with the conversation instead of costing every
+            // later turn a fixed slice of a phone screen.
+            const ABOUT = [
+                ["EXPLORES", "Pair trades across <b>625 US instruments</b> \u2014 the S&P 500 plus 122 " +
+                    "curated ETFs. Name a universe and it fits <b>every combination</b> in it, up to 40 " +
+                    "names, then backtests the best on data they were <b>not</b> chosen on."],
+                ["FOR", "Anyone weighing a pair trade who wants the <b>evidence and its limits</b>, not a " +
+                    "recommendation. Research only \u2014 never advice."],
+                ["HOW TO USE", "Name a <b>sector</b>, an <b>ETF family</b>, or <b>two tickers</b>. Broad " +
+                    "questions fan out to researchers working in parallel; their timeline, charts and " +
+                    "<b>evidence</b> appear with the answer."],
+            ];
+
             function showIntro() {
-                const intro = make(
-                    "div",
-                    "intro",
-                    "Converge pulls market data with tools and shows every call it makes. " +
-                        "Covers US stocks, ETFs and indices: prices, risk metrics, charts, news and SEC filings. Try:",
-                );
-                for (const q of EXAMPLES) {
-                    const button = make("button", "", q);
-                    button.addEventListener("click", () => send(q));
-                    intro.append(button);
+                const intro = make("div", "intro");
+
+                const about = make("details", "intro-about");
+                about.open = true;
+                about.append(make("summary", "intro-title", "WHAT THIS IS"));
+                for (const [term, html] of ABOUT) {
+                    const row = make("div", "intro-row");
+                    row.append(make("span", "intro-dt", term));
+                    const dd = make("span", "intro-dd");
+                    dd.innerHTML = html;  // fixed copy from this file, never user or model text
+                    row.append(dd);
+                    about.append(row);
                 }
+                intro.append(about);
+
+                intro.append(make("div", "intro-lead",
+                    "Please select an example from one of the corresponding categories. Hover over an " +
+                    "example to see the expected agent orchestration and tool calls."));
+
+                // Every category stays visible; opening one closes the rest, so the list is never
+                // more than a few lines but nothing is hidden behind a dropdown.
+                const groups = [];
+                const syncing = { on: false };
+                EXAMPLE_GROUPS.forEach(([label, items], i) => {
+                    const block = make("details", "intro-cat");
+                    block.open = i === 0;
+                    const head = make("summary", "intro-cat-head");
+                    head.append(make("span", "", label), make("span", "intro-cat-n", String(items.length)));
+                    block.append(head);
+                    const list = make("div", "intro-items");
+                    block.append(list);
+                    for (const [query, tags, blurb] of items) {
+                        // One sentence, then the tags as bullets. They were a visible row under
+                        // every example, which was a lot of chrome for something you read once.
+                        const button = make("button", "", query);
+                        button.setAttribute("data-tip", blurb + "\n" + tags.map((x) => "\u2022 " + x).join("\n"));
+                        button.addEventListener("click", () => send(query));
+                        list.append(button);
+                    }
+                    // Opening one closes the rest. Guarded because setting `open` fires `toggle`
+                    // again on each sibling, which re-entered this handler and made the whole set
+                    // flicker. The summary's own click is suppressed while re-entrant.
+                    block.addEventListener("toggle", () => {
+                        if (!block.open || syncing.on) return;
+                        syncing.on = true;
+                        for (const other of groups) if (other !== block) other.open = false;
+                        syncing.on = false;
+                    });
+                    groups.push(block);
+                    intro.append(block);
+                });
+
                 messages.replaceChildren(intro);
             }
 
@@ -838,16 +1075,65 @@
             }
 
             // Show **bold** and colour signed numbers; drop *italic* markers and turn "* " bullets into "• ".
+            // The writer's answer ends with an "**Evidence**" list, one line per finding id. Those
+            // lines are pulled out here so each inline [F1.2.1] can carry its finding as a tooltip
+            // and the list itself can sit collapsed: the citation stays checkable without the
+            // evidence taking more room than the answer. The list is kept rather than replaced,
+            // because a reader skimming without a mouse must still be able to see what was cited.
+            function splitEvidence(text) {
+                const at = text.search(/\n\s*\*\*Evidence\*\*\s*\n/);
+                if (at < 0) return [text, []];
+                const body = text.slice(0, at);
+                // Two shapes reach this: "[F1.1.1] PAIR metric = value (via tool)" from the research
+                // path, and "tool(args) - source" from the analyst's. Both are evidence; only the
+                // first carries ids, so filtering on ids would have shown the analyst nothing.
+                const items = text
+                    .slice(at)
+                    .split("\n")
+                    .map((l) => l.replace(/^\s*[-•]\s*/, "").trim())
+                    .filter((l) => l && !/^\*\*Evidence\*\*$/.test(l));
+                return [body, items];
+            }
+
+            function renderEvidence(node, items) {
+                if (!items.length) return;
+                const box = make("details", "evidence");
+                box.append(make("summary", "", "EVIDENCE (" + items.length + ")"));
+                const list = make("ul");
+                for (const item of items) list.append(make("li", "", item));
+                box.append(list);
+                node.append(box);
+            }
+
+            // [F1.2.1] -> a hoverable marker carrying that finding's text.
+            function colorizeCitations(node, text, byId) {
+                const parts = text.split(/(\[F[\d.]+\])/);
+                parts.forEach((part, i) => {
+                    const id = i % 2 ? part.slice(1, -1) : null;
+                    if (!id) return colorize(node, part);
+                    const span = make("span", "cite", part);
+                    if (byId[id]) span.setAttribute("data-tip", byId[id]);
+                    node.append(span);
+                });
+            }
+
             function renderText(node, text) {
-                text = text.replace(/^\s*[*-] /gm, "• ").replace(/(?<!\*)\*([^*\n]+)\*(?!\*)/g, "$1");
+                const [body, evidence] = splitEvidence(text);
+                const byId = {};
+                for (const item of evidence) {
+                    const m = item.match(/^\[(F[\d.]+)\]\s*(.*)$/);
+                    if (m) byId[m[1]] = m[2];
+                }
+                text = body.replace(/^\s*[*-] /gm, "• ").replace(/(?<!\*)\*([^*\n]+)\*(?!\*)/g, "$1");
                 text = text.replace(/\*\*(\$?[\d,.]+)\*\*%/g, "**$1%**").replace(/([+\-−])(\$?)\*\*/g, "**$1$2"); // +**1.5**% and +$**6** -> **+1.5%** and **+$6**
                 text.split(/(\*\*[^*]+\*\*)/).forEach((part, i) => {
                     if (i % 2) {
                         const bold = make("b");
-                        colorize(bold, part.slice(2, -2));
+                        colorizeCitations(bold, part.slice(2, -2), byId);
                         node.append(bold);
-                    } else colorize(node, part);
+                    } else colorizeCitations(node, part, byId);
                 });
+                renderEvidence(node, evidence);
             }
 
             function addMessage(role, text, isLoading = false) {
@@ -860,93 +1146,363 @@
                 return message;
             }
 
-            // Which model answered and how many tool calls it took
-            function addRun(model, used, before) {
-                const row = make("div", "run");
-                row.append(make("b", "", "MODEL"), model, make("b", "", "TOOL CALLS"), String(used));
-                messages.insertBefore(row, before);
+            // One panel per run: every tool call drawn to scale on a shared clock, each row
+            // expandable into the call itself. The Lead reports a single `research` call however
+            // many researchers it started, so without the per-researcher rows and their timestamps
+            // there would be nothing to show that four ran at once rather than one after another.
+            // Folding the calls in here also keeps a twenty-step fan-out to one block instead of
+            // twenty stacked rows burying the answer.
+            const AGENT_CLASS = [
+                [/^Clarifier$/, "ag-clarifier"],
+                [/^Lead$/, "ag-lead"],
+                [/^Researcher/, "ag-researcher"],
+                [/^Writer$/, "ag-writer"],
+                [/^Analyst$/, "ag-analyst"],
+            ];
+
+            // "Researcher 2: Screen the nasdaq_leveraged ETF family for..." -> "Researcher 2".
+            // The brief is still there as a tooltip; it just stops being the visible label.
+            function shortAgent(name) {
+                return String(name || "tool").split(":")[0].trim();
             }
 
-            // The fan-out to scale. Every bar is positioned from the started_at/ended_at the
-            // recorder stamps, so overlap here is evidence, not decoration: the Lead reports one
-            // `research` call however many researchers it started, and this is what shows the
-            // difference between four in parallel and four in sequence.
-            function addTimeline(calls, before) {
-                const spans = calls.filter((c) => typeof c.started_at === "number" && c.ended_at >= c.started_at);
-                const researchers = spans.filter((c) => c.name === "researcher");
-                if (researchers.length < 2) return; // nothing to show about parallelism
-                const t0 = Math.min(...spans.map((c) => c.started_at));
-                const t1 = Math.max(...spans.map((c) => c.ended_at));
-                const width = Math.max(t1 - t0, 0.001);
+            function agentClass(name) {
+                const hit = AGENT_CLASS.find(([re]) => re.test(name || ""));
+                return hit ? hit[1] : "";
+            }
 
-                const box = make("div", "timeline");
-                box.append(make("div", "tl-head", "AGENT TIMELINE"));
-                for (const call of [...spans].sort((a, b) => a.started_at - b.started_at)) {
-                    const row = make("div", "tl-row");
-                    const track = make("div", "tl-track");
-                    const bar = make("div", "tl-bar");
-                    if (call.name === "researcher") bar.classList.add("researcher");
-                    else if (call.agent === "Lead") bar.classList.add("lead");
-                    // A zero-length call at the very end sits at left:100%, so the minimum width
-                    // would hang past the track. Clamp the start, never the width, so a short call
-                    // stays visible.
-                    const w = Math.max(((call.ended_at - call.started_at) / width) * 100, 0.6);
-                    bar.style.left = Math.min(((call.started_at - t0) / width) * 100, 100 - w) + "%";
-                    bar.style.width = w + "%";
-                    bar.title = call.agent + " - " + call.name;
-                    track.append(bar);
-                    const label = call.name === "researcher" ? call.agent : call.agent + " / " + call.name;
-                    row.append(make("div", "tl-name", label), track,
-                               make("div", "tl-dur", (call.ended_at - call.started_at).toFixed(1) + "s"));
-                    box.append(row);
+            // A run is a tree, not a list: an agent, and under it the calls that agent made. The
+            // flat version labelled every row "<agent> / <tool>", so truncation hid the tool name and
+            // six different calls by one researcher read as the same row repeated.
+            // SPAN rows are recorded by Python for steps the SDK cannot see: an agent with no tools
+            // (the Clarifier, the Writer) and each researcher inside the fan-out. They give an agent
+            // its own start and end.
+            const SPAN_ROW = { researcher: 1, clarify: 1, writer: 1, agent: 1 };
+
+            // A tool call that starts other agents, and which agents it starts. This is what turns a
+            // list of calls back into the desk's actual shape: the Lead's `research` call is the
+            // parent of every researcher that ran inside it, and `write_report` is the Writer's.
+            const SPAWNS = [["research", /^Researcher/], ["write_report", /^Writer$/]];
+
+            function addRunPanel(model, calls, before) {
+                const box = make("div", "runpanel");
+                const researchers = calls.filter((c) => c.name === "researcher");
+
+                const head = make("div", "rp-head");
+                // Tool calls only: the span rows are agents, and counting them as "steps" beside
+                // "3 researchers in parallel" read as a tool-call count that was five too high.
+                const toolCalls = calls.filter((c) => !SPAN_ROW[c.name]).length;
+                head.append(make("span", "", "RUN TIMELINE"),
+                            make("span", "rp-note", model + " \u00b7 " + toolCalls + " tool calls"));
+                // Per round, not pooled. Two rounds of two were reported as "4 researchers in
+                // parallel" over an envelope that includes the gap between them - four were never
+                // concurrent, and this is the one sentence here that claims a fact about
+                // concurrency, so it has to be the truth.
+                const rounds = calls.filter((c) => c.name === "research");
+                const wide = rounds
+                    .map((r) => researchers.filter((c) => c.started_at >= r.started_at - 0.05 &&
+                                                          c.ended_at <= r.ended_at + 0.05))
+                    .filter((set) => set.length > 1);
+                const best = wide.sort((a, b) => b.length - a.length)[0];
+                if (best) {
+                    const work = best.reduce((n, c) => n + (c.ended_at - c.started_at), 0);
+                    const span = Math.max(...best.map((c) => c.ended_at)) - Math.min(...best.map((c) => c.started_at));
+                    head.append(make("span", "rp-note",
+                        best.length + " researchers in parallel \u00b7 " + work.toFixed(1) + "s of work in " +
+                        span.toFixed(1) + "s (" + (work / Math.max(span, 0.001)).toFixed(1) + "x)" +
+                        (wide.length > 1 ? " \u00b7 " + wide.length + " rounds" : "")));
+                }
+                box.append(head);
+
+                const ordered = [...calls].sort((a, b) => (a.started_at || 0) - (b.started_at || 0));
+                const num = (v) => (typeof v === "number" && isFinite(v) ? v : 0);
+
+                // One group per SPAN row, not per agent name. research.py restarts researcher
+                // numbering every round, so two rounds can produce the same label - keyed by name,
+                // the second round overwrote the first and its tool calls were drawn under the
+                // wrong parent. A group is an agent *occurrence*.
+                const groups = [];
+                for (const call of ordered) {
+                    if (!SPAN_ROW[call.name]) continue;
+                    groups.push({ who: call.agent || "tool", span: call, kids: [],
+                                  from: num(call.started_at), to: num(call.ended_at) });
+                }
+                // Then every tool call joins the occurrence of its agent that contains it in time.
+                for (const call of ordered) {
+                    if (SPAN_ROW[call.name]) continue;
+                    const who = call.agent || "tool";
+                    const at = num(call.started_at);
+                    let g = groups.find((x) => x.who === who && x.span &&
+                                               at >= x.from - 0.05 && at <= x.to + 0.05);
+                    if (!g) g = groups.find((x) => x.who === who && !x.span);
+                    if (!g) { g = { who, span: null, kids: [], from: Infinity, to: 0 }; groups.push(g); }
+                    g.kids.push(call);
+                    if (!g.span) {
+                        g.from = Math.min(g.from, at);
+                        g.to = Math.max(g.to, num(call.ended_at));
+                    }
+                }
+                for (const g of groups) if (!isFinite(g.from)) { g.from = 0; g.to = 0; }
+
+                // Attach each spawned agent to the call that started it, matched on time containment
+                // so a second round's researchers go under that round's `research` call.
+                const kidsOf = new Map();
+                const nested = new Set();
+                for (const g of groups) {
+                    const rule = SPAWNS.find(([, re]) => re.test(g.who));
+                    if (!rule) continue;
+                    const parent = ordered.find((c) => c.name === rule[0] &&
+                        num(c.started_at) <= g.from + 0.05 && num(c.ended_at) >= g.to - 0.05);
+                    if (!parent) continue;
+                    if (!kidsOf.has(parent)) kidsOf.set(parent, []);
+                    kidsOf.get(parent).push(g);
+                    nested.add(g);  // the occurrence, not the name: two rounds share a name
                 }
 
-                // Summed work against wall-clock span: the speedup the fan-out actually bought.
-                const work = researchers.reduce((n, c) => n + (c.ended_at - c.started_at), 0);
-                const span = Math.max(...researchers.map((c) => c.ended_at)) - Math.min(...researchers.map((c) => c.started_at));
-                box.append(make("div", "tl-note",
-                    researchers.length + " researchers - " + work.toFixed(1) + "s of work in " +
-                    span.toFixed(1) + "s (" + (work / Math.max(span, 0.001)).toFixed(1) + "x)"));
+                const timed = calls.filter((c) => typeof c.started_at === "number" && c.ended_at >= c.started_at);
+                const t0 = timed.length ? Math.min(...timed.map((c) => c.started_at)) : 0;
+                const t1 = timed.length ? Math.max(...timed.map((c) => c.ended_at)) : 1;
+                const width = Math.max(t1 - t0, 0.001);
+
+                // Shades follow the researcher's number, not the order the server happened to
+                // return them in: concurrent researchers share a start time to the millisecond, so
+                // first-appearance order is completion order and "Researcher 2" changed colour
+                // between runs. Keyed by short name so both rounds of a re-run agree.
+                const shade = new Map();
+                const researcherNames = [...new Set(groups.filter((g) => /^Researcher/.test(g.who))
+                                                          .map((g) => shortAgent(g.who)))]
+                    .sort((a, b) => agentRank(a) - agentRank(b));
+                researcherNames.forEach((who, i) => shade.set(who, "ag-r" + ((i % 6) + 1)));
+                const classOf = (who) => shade.get(shortAgent(who)) || agentClass(who);
+
+                const legend = make("div", "rp-legend");
+                const seen = new Set();
+                // Chronological, so the legend reads in the order the rows below it do. Ties go to
+                // the agent number, because concurrent researchers share a start time.
+                const legendOrder = [...groups].sort((a, b) => a.from - b.from || agentRank(a.who) - agentRank(b.who));
+                for (const g of legendOrder) {
+                    const label = shortAgent(g.who);
+                    if (seen.has(label)) continue;
+                    seen.add(label);
+                    const tag = make("span", "rp-key");
+                    tag.append(make("span", "rp-dot " + classOf(g.who)), label);
+                    tag.setAttribute("data-tip", g.who);
+                    legend.append(tag);
+                }
+                box.append(legend);
+
+                function bar(cls, from, to) {
+                    const track = make("div", "rp-track");
+                    const el = make("div", "rp-bar " + cls);
+                    // Clamped at both ends. Without the upper bound, a span longer than the run
+                    // (only possible from a malformed payload) made `100 - w` negative, and that
+                    // negative became the left offset - the bar then ran across the name and
+                    // duration columns and off the panel.
+                    const w = Math.min(Math.max(((num(to) - num(from)) / width) * 100, 0.6), 100);
+                    const left = Math.min(Math.max(((num(from) - t0) / width) * 100, 0), 100 - w);
+                    el.style.left = left + "%";
+                    el.style.width = w + "%";
+                    track.append(el);
+                    return track;
+                }
+
+                // "Researcher 2" before "Researcher 10", and before anything unnumbered. Three
+                // researchers start within milliseconds of each other, so sorting by start time
+                // reordered the list from one run to the next.
+                function byAgentOrder(a, b) {
+                    return agentRank(a.who) - agentRank(b.who) || a.from - b.from;
+                }
+
+                function indent(node, depth) {
+                    if (depth) node.style.setProperty("--depth", depth);
+                    return node;
+                }
+
+                // Ticks on the same grid as the bars, so a label sits above what it measures.
+                function axis() {
+                    const row = make("div", "rp-axis");
+                    row.append(make("div"));
+                    const track = make("div", "rp-axis-track");
+                    const span = t1 - t0;
+                    for (let i = 0; i <= 4; i++) {
+                        const tick = make("div", "rp-tick");
+                        tick.append(make("span", "rp-tick-label", (span * (i / 4)).toFixed(1) + "s"));
+                        tick.style.left = (i / 4) * 100 + "%";
+                        track.append(tick);
+                    }
+                    row.append(track, make("div"));
+                    return row;
+                }
+
+                // One tool call, plus any agents it started underneath it.
+                function renderCall(call, cls, depth) {
+                    const row = make("details", "rp-row");
+                    const summary = make("summary");
+                    // Tool first: it is what distinguishes one row from the next, and what survives
+                    // when the column is narrow.
+                    const name = make("div", "rp-name rp-is-tool " + cls);
+                    name.append(make("span", "rp-tool", call.name));
+                    const spawned = kidsOf.get(call) || [];
+                    if (spawned.length) name.append(make("span", "rp-count", "\u2192 " + spawned.length + " agent" + (spawned.length === 1 ? "" : "s")));
+                    indent(name, depth);
+                    summary.append(name, bar(cls, call.started_at || 0, call.ended_at || 0),
+                                   make("div", "rp-dur", ((call.ended_at || 0) - (call.started_at || 0)).toFixed(1) + "s"));
+                    row.append(summary);
+
+                    // Agents this call started come FIRST: they are what the open state is for.
+                    // Appended after the JSON dump they started 318px below the row, behind a
+                    // scrollable box, which is where the fan-out went to hide.
+                    for (const kid of spawned.slice().sort(byAgentOrder)) row.append(renderAgent(kid, depth + 1));
+
+                    let result;
+                    // JSON.parse("null") returns null without throwing, and reading .sql off it
+                    // throws out of addRunPanel - past addCharts and renderText - so one null
+                    // result cost the user the whole answer the server had already produced.
+                    try { result = JSON.parse(call.result) || {}; } catch (e) { result = { result: call.result }; }
+                    if (typeof result !== "object") result = { result };
+                    const sql = (call.args && call.args.sql) || result.sql || result.universe_sql;
+                    if (sql) {
+                        const panel = indent(make("div", "rp-sql"), depth);
+                        panel.append(make("div", "rp-sql-head", "SQL THE AGENT WROTE"));
+                        panel.append(make("pre", "", String(sql).trim()));
+                        row.append(panel);
+                    }
+                    const dump = indent(make("pre", "", JSON.stringify({ args: call.args, result }, null, 2)), depth);
+                    if (spawned.length) {
+                        // This row opens so the agents it started are visible, but the raw payload
+                        // should not ride along: a `research` call's dump is several thousand
+                        // characters and it was the first thing under the row.
+                        const raw = make("details", "rp-raw");
+                        raw.append(make("summary", "", "raw call and result"));
+                        raw.append(dump);
+                        row.append(indent(raw, depth));
+                        row.open = true;
+                    } else {
+                        row.append(dump);
+                    }
+                    return row;
+                }
+
+                // One agent, plus the calls it made.
+                function renderAgent(g, depth) {
+                    const cls = classOf(g.who);
+                    const group = make("details", "rp-group");
+                    const top = make("summary");
+                    const name = make("div", "rp-name rp-is-agent " + cls);
+                    name.append(make("span", "rp-dot " + cls), make("span", "rp-agent", shortAgent(g.who)));
+                    name.append(make("span", "rp-count",
+                        g.kids.length ? g.kids.length + (g.kids.length === 1 ? " call" : " calls") : "no tool calls"));
+                    if (g.span) name.setAttribute("data-tip", g.who + "\n\n" + g.span.result);
+                    indent(name, depth);
+                    top.append(name, bar(cls, g.from, g.to), make("div", "rp-dur", (g.to - g.from).toFixed(1) + "s"));
+                    group.append(top);
+                    for (const call of g.kids) group.append(renderCall(call, cls, depth + 1));
+                    // Collapsed by default so a 16-step run is six lines, but an agent that started
+                    // other agents stays open: hiding the fan-out is hiding the whole point.
+                    group.open = g.kids.some((c) => (kidsOf.get(c) || []).length > 0);
+                    if (!g.kids.length) group.classList.add("rp-leaf");
+                    return group;
+                }
+
+                box.append(axis());
+                for (const g of groups) if (!nested.has(g)) box.append(renderAgent(g, 0));
                 messages.insertBefore(box, before);
             }
 
-            // One collapsible line per tool call the harness ran, shown above the answer
-            function addToolCall(call, before) {
-                // Tool results are JSON, but never trust that: a broken result must not kill the transcript.
-                let result;
-                try {
-                    result = JSON.parse(call.result);
-                } catch (e) {
-                    result = { result: call.result };
-                }
-                const args = Object.entries(call.args).map(([k, v]) => k + "=" + JSON.stringify(v)).join(", ");
-                const summary = make("summary");
-                summary.append(make("b", "", call.agent ? call.agent.toUpperCase() : "TOOL CALL"), call.name + "(" + args + ")");
-                const details = make("details", "tool");
-                details.append(summary, make("pre", "", JSON.stringify(result, null, 2)));
-                messages.insertBefore(details, before);
-            }
 
             // Charts come back in their own field, not inside a tool result, so the model never
             // carries a figure in its context. Each is a Plotly spec built in chart.py.
+            // Three researchers screening three universes returned three full-width tables, which
+            // pushed the answer off the screen. Several charts become one pane with a tab per
+            // author; a single chart is left exactly as it was.
             function addCharts(charts, before) {
-                for (const { symbol, figure } of charts) {
-                    // One bad figure must not cost the user the model's written answer, which is
-                    // rendered after this loop.
-                    try {
-                        const node = make("div", "chart");
-                        node.setAttribute("role", "img");
-                        node.setAttribute("aria-label", symbol + " chart");
-                        messages.insertBefore(node, before);
-                        Plotly.newPlot(node, figure.data, figure.layout, PLOTLY_CONFIG)
-                            .then(() => {
-                                reportRange(node);
-                                watchSize(node);
-                            })
-                            .catch(() => (node.textContent = symbol + " chart failed to render"));
-                    } catch (e) {
-                        /* keep the transcript and the answer */
+                if (!charts.length) return;
+                addChartTabs(charts, before);
+            }
+
+            // What kind of figure this is, so tables are not tabbed against line charts. A reader
+            // comparing three screens wants them side by side; a z-score panel is a different
+            // question and belongs under its own heading.
+            function chartKind(figure) {
+                const types = new Set((figure.data || []).map((d) => d.type));
+                if (types.has("table")) return "SCREEN RESULTS";
+                const title = (((figure.layout || {}).title || {}).text || "");
+                if (/z-score/i.test(title)) return "Z-SCORE PANELS";
+                return "PRICE CHARTS";
+            }
+
+            // "Researcher 2" before "Researcher 10", and before anything unnumbered.
+            function agentRank(name) {
+                const m = /(\d+)/.exec(name || "");
+                return m ? Number(m[1]) : 1e9;
+            }
+
+            function addChartTabs(charts, before) {
+                const kinds = new Map();
+                for (const c of charts) {
+                    const kind = chartKind(c.figure);
+                    if (!kinds.has(kind)) kinds.set(kind, []);
+                    kinds.get(kind).push(c);
+                }
+                for (const [kind, items] of kinds) {
+                    items.sort((a, b) => agentRank(shortAgent(a.agent)) - agentRank(shortAgent(b.agent)));
+                    if (items.length === 1) { addChartsPlain(items, before, kind); continue; }
+                    const box = make("div", "chart-tabs");
+                    box.append(make("div", "chart-kind", kind + "  \u00b7  " + items.length));
+                    const bar = make("div", "chart-tabbar");
+                    const panes = [];
+                    items.forEach(({ symbol, figure, agent }, i) => {
+                        const who = agent ? shortAgent(agent) : symbol || "chart " + (i + 1);
+                        const tab = make("button", "chart-tab" + (i ? "" : " on"));
+                        tab.append(make("span", "rp-dot " + (agentClass(who) || "ag-r1")), who);
+                        tab.setAttribute("data-tip", (agent || who) + "\n" + (symbol || ""));
+                        const pane = make("div", "chart-pane" + (i ? "" : " on"));
+                        drawInto(pane, symbol, figure);
+                        tab.addEventListener("click", () => {
+                            bar.querySelectorAll(".chart-tab").forEach((b) => b.classList.remove("on"));
+                            panes.forEach((pn) => pn.classList.remove("on"));
+                            tab.classList.add("on");
+                            pane.classList.add("on");
+                            // Plotly sized to the container while it was hidden.
+                            const node = pane.querySelector(".chart");
+                            if (node && window.Plotly) Plotly.Plots.resize(node);
+                        });
+                        bar.append(tab);
+                        panes.push(pane);
+                    });
+                    box.append(bar);
+                    panes.forEach((pn) => box.append(pn));
+                    messages.insertBefore(box, before);
+                }
+            }
+
+            function drawInto(parent, symbol, figure) {
+                try {
+                    const node = make("div", "chart");
+                    node.setAttribute("role", "img");
+                    node.setAttribute("aria-label", symbol + " chart");
+                    parent.append(node);
+                    Plotly.newPlot(node, figure.data, figure.layout, PLOTLY_CONFIG)
+                        .then(() => { reportRange(node); watchSize(node); })
+                        .catch(() => (node.textContent = symbol + " chart failed to render"));
+                } catch (e) {
+                    /* one bad figure must not cost the others or the answer */
+                }
+            }
+
+            function addChartsPlain(charts, before, kind) {
+                for (const { symbol, figure, agent } of charts) {
+                    const holder = make("div", "chart-solo");
+                    if (kind) holder.append(make("div", "chart-kind", kind));
+                    drawInto(holder, symbol, figure);
+                    if (agent) {
+                        const by = make("div", "chart-by");
+                        by.append(make("span", "rp-dot " + (agentClass(shortAgent(agent)) || "ag-r1")),
+                                  "drawn by " + shortAgent(agent));
+                        by.setAttribute("data-tip", agent);
+                        holder.append(by);
                     }
+                    messages.insertBefore(holder, before);
                 }
             }
 
@@ -1017,51 +1573,130 @@
                 });
             }
 
+            // The in-flight run, so it can be stopped: by the STOP button, or by starting a new
+            // session. Without this, newSession() left sendBtn disabled forever and every example
+            // button silently did nothing.
+            let inflight = null;
+
+            function setRunning(on) {
+                sendBtn.classList.toggle("stopping", on);
+                sendBtn.textContent = on ? "STOP" : "SEND";
+                sendBtn.disabled = false;  // never disabled: while running it is the stop control
+            }
+
+            function stopRun() {
+                if (inflight) inflight.abort();
+                inflight = null;
+                setRunning(false);
+            }
+
             async function send(forcedText) {
+                if (inflight) return stopRun();   // the button is STOP while a run is in flight
                 const text = (forcedText || userInput.value).trim();
-                if (!text || sendBtn.disabled) return;
+                if (!text) return;
 
                 userInput.value = "";
-                sendBtn.disabled = true;
+                const run = new AbortController();
+                inflight = run;
+                setRunning(true);
+                remember(text);
                 if (messages.querySelector(".intro")) messages.replaceChildren();
+                // The panel has served its purpose once a question is asked, and it is long.
                 addMessage("user", text);
-                const loading = addMessage("assistant", "Fetching data...", true);
+                const loading = addMessage("assistant", "Working...", true);
                 const content = loading.querySelector(".content");
                 const model = modelSelect.value; // what this question is sent with
+
+                // The page cannot know how far along a run is until /chat returns, so an honest
+                // elapsed count beats a fake progress bar. The estimate is deliberately generous:
+                // a measured research question lands around 20-40s, and a reader who is told "a
+                // minute" and waits 25s is pleased, where the reverse reads as a hang.
+                const startedAt = Date.now();
+                const ticker = setInterval(() => {
+                    const secs = Math.round((Date.now() - startedAt) / 1000);
+                    content.textContent = "Working... " + secs + "s" +
+                        (secs > 10 ? "  (research fans out; about a minute)" : "");
+                }, 1000);
 
                 try {
                     const res = await fetch("/chat", {
                         method: "POST",
                         headers: { "Content-Type": "application/json" },
                         body: JSON.stringify({ message: text, session_id: sessionId, model }),
+                        signal: run.signal,
                     });
                     const data = await res.json().catch(() => ({})); // an error page is not JSON
                     if (!res.ok) throw new Error(typeof data.detail === "string" ? data.detail : "the server returned " + res.status);
                     sessionId = data.session_id;
-                    addRun(model, data.tool_calls.length, loading);
-                    addTimeline(data.tool_calls, loading);
-                    for (const call of data.tool_calls) addToolCall(call, loading);
+                    if (data.tool_calls.length) addRunPanel(model, data.tool_calls, loading);
                     addCharts(data.charts || [], loading);
                     content.replaceChildren();
                     renderText(content, data.response);
                 } catch (e) {
-                    content.textContent = "Error: " + e.message;
+                    // An aborted run is a choice, not a failure, so it does not read as an error.
+                    content.textContent = e.name === "AbortError"
+                        ? "Stopped after " + Math.round((Date.now() - startedAt) / 1000) + "s."
+                        : "Error: " + e.message;
+                } finally {
+                    clearInterval(ticker);
+                    if (inflight === run) inflight = null;
+                    setRunning(false);
                 }
                 loading.classList.remove("loading");
-                sendBtn.disabled = false;
                 userInput.focus();
                 messages.scrollTop = messages.scrollHeight;
             }
 
             async function newSession() {
+                stopRun();  // a run left in flight would finish into a transcript that is gone
                 if (sessionId) await fetch("/clear?session_id=" + sessionId, { method: "POST" });
                 sessionId = null;
                 showIntro();
                 userInput.focus();
             }
 
+            // Shell-style history: Up walks back through what was sent, Down returns to the draft.
+            // `draft` holds whatever was half-typed, so walking the history never loses it.
+            const history = [];
+            let historyAt = -1;
+            let draft = "";
+
+            function remember(text) {
+                if (history[history.length - 1] !== text) history.push(text);
+                historyAt = -1;
+                draft = "";
+            }
+
+            function recall(step) {
+                if (!history.length) return;
+                if (historyAt === -1) {
+                    if (step > 0) return; // already at the live draft
+                    draft = userInput.value;
+                    historyAt = history.length - 1;
+                } else {
+                    historyAt += step > 0 ? 1 : -1;
+                }
+                if (historyAt >= history.length || historyAt < 0) {
+                    historyAt = -1;
+                    userInput.value = draft;
+                } else {
+                    userInput.value = history[historyAt];
+                }
+                // Put the caret at the end rather than wherever it happened to be.
+                requestAnimationFrame(() => userInput.setSelectionRange(userInput.value.length, userInput.value.length));
+            }
+
             sendBtn.addEventListener("click", () => send());
-            userInput.addEventListener("keydown", (e) => e.key === "Enter" && send());
+            userInput.addEventListener("keydown", (e) => {
+                if (e.key === "Enter") return send();
+                if (e.key === "ArrowUp") {
+                    e.preventDefault();
+                    recall(-1);
+                } else if (e.key === "ArrowDown") {
+                    e.preventDefault();
+                    recall(1);
+                }
+            });
             document.getElementById("new-btn").addEventListener("click", newSession);
             if (config.tape.length) drawTape(config.tape); // empty if every quote failed at start-up
             drawSparkles();

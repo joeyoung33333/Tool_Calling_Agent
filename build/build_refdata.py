@@ -10,7 +10,7 @@ so resolving them live would spend a research agent's budget re-deriving constan
 *can* change day to day - prices, correlations, betas, half-lives, backtests - is computed live and
 is never stored here. The output is committed because continuous deploy ships only committed files.
 
-Universe (~640 names, approved 2026-11-09): the S&P 500 plus a curated list of major ETFs. That
+Universe (625 names): the S&P 500 (503) plus a curated list of 122 major ETFs. That
 covers every Dow 30 name and nearly every Nasdaq-100 name, and the ETF list carries the index funds
 and their leveraged families explicitly, which is what "an ETF family" queries screen over.
 
@@ -29,12 +29,12 @@ from pathlib import Path
 import duckdb
 import requests
 
-# This script lives in build/ but reads the project's fetchers from the repo root, which Python does
-# not put on sys.path when a script is run by path. Added before the local imports so that
+# This script lives in build/ but reads the project's fetchers from sources/, which Python does not
+# put on sys.path when a script is run by path. Added before the local imports so that
 # `uv run build/build_refdata.py` works from a clean checkout.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-import data  # noqa: E402 - must follow the sys.path line above
+from sources import data  # noqa: E402 - must follow the sys.path line above
 import wikitables  # noqa: E402 - sibling module inside build/
 
 OUT_DIR = Path(__file__).resolve().parent.parent / "data"
