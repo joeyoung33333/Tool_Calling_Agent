@@ -132,6 +132,46 @@
                 border-left: 1px solid rgba(0, 0, 0, 0.4);
             }
 
+            /* What this agent explores, who it is for, and how to drive it. Stated on the page
+               rather than only in the README: a reader who lands here should not have to guess. */
+            #about {
+                display: grid;
+                grid-template-columns: 5.5rem 1fr;
+                gap: 0.2rem 0.75rem;
+                padding: 0.6rem 0.9rem;
+                margin-bottom: 0.6rem;
+                font-size: 0.75rem;
+                line-height: 1.45;
+                color: var(--dim);
+                background: var(--panel);
+                border: 1px solid var(--line);
+                border-left: 3px solid var(--amber);
+                border-radius: 0 6px 6px 0;
+            }
+            #about dt {
+                color: var(--amber);
+                font-weight: 700;
+                letter-spacing: 0.1em;
+                font-size: 0.65rem;
+                padding-top: 0.1rem;
+            }
+            #about dd {
+                margin: 0;
+            }
+            #about b {
+                color: var(--muted);
+                font-weight: 700;
+            }
+            @media (max-width: 640px) {
+                #about {
+                    grid-template-columns: 1fr;
+                    gap: 0.1rem;
+                }
+                #about dt {
+                    padding-top: 0.4rem;
+                }
+            }
+
             /* Buttons: outlined by default (example queries); .solid is the amber action button */
             button {
                 font: inherit;
@@ -386,6 +426,59 @@
                 transform: translateX(3px);
             }
 
+            /* The fan-out, drawn to scale. Overlapping bars are the whole point: they are what
+               shows several researchers ran at once rather than one after another. */
+            div.timeline {
+                padding: 0.5rem 0.75rem;
+                font-size: 0.7rem;
+                color: var(--dim);
+                background: var(--panel);
+                border: 1px solid var(--line);
+                border-left: 3px solid var(--amber);
+                border-radius: 0 6px 6px 0;
+            }
+            div.timeline .tl-head {
+                color: var(--amber);
+                font-weight: 700;
+                letter-spacing: 0.12em;
+                font-size: 0.65rem;
+                margin-bottom: 0.4rem;
+            }
+            div.timeline .tl-row {
+                display: grid;
+                grid-template-columns: 11rem 1fr 3.2rem;
+                gap: 0.5rem;
+                align-items: center;
+                margin-bottom: 2px;
+            }
+            div.timeline .tl-name {
+                overflow: hidden;
+                text-overflow: ellipsis;
+                white-space: nowrap;
+            }
+            div.timeline .tl-track {
+                position: relative;
+                height: 0.75rem;
+                background: linear-gradient(var(--line), var(--line)) left center / 100% 1px no-repeat;
+            }
+            div.timeline .tl-bar {
+                position: absolute;
+                top: 0;
+                height: 100%;
+                min-width: 2px;
+                background: var(--muted);
+                border-radius: 2px;
+            }
+            div.timeline .tl-bar.lead { background: var(--amber); }
+            div.timeline .tl-bar.researcher { background: var(--green); }
+            div.timeline .tl-dur {
+                text-align: right;
+                color: var(--faint);
+            }
+            div.timeline .tl-note {
+                margin-top: 0.4rem;
+                color: var(--faint);
+            }
             details.tool,
             div.run {
                 padding: 0.4rem 0.75rem;
@@ -568,6 +661,28 @@
                 <span class="tagline">Deep research agent for US equity and ETF pair trades</span>
                 <button class="solid" id="new-btn">New session</button>
             </header>
+            <dl id="about">
+                <dt>EXPLORES</dt>
+                <dd>
+                    Every possible pair among <b>625 US instruments</b> — the S&amp;P 500 plus 122 curated
+                    ETFs — over three years of daily prices. For each pair it measures whether the two
+                    move together, drift apart, then <b>converge</b>, then backtests the best candidates
+                    on data they were <b>not</b> chosen on.
+                </dd>
+                <dt>FOR</dt>
+                <dd>
+                    Anyone weighing a statistical pair trade who wants the <b>evidence and its limits</b>
+                    rather than a recommendation: analysts, quant students, and traders checking whether a
+                    pair survives costs and a holdout. Research only — never advice.
+                </dd>
+                <dt>HOW TO USE</dt>
+                <dd>
+                    Name a <b>sector</b> ("energy"), an <b>ETF family</b> ("nasdaq_leveraged"), or
+                    <b>two tickers</b> ("LMT and RTX"). Broad questions fan out to researchers working in
+                    parallel — their timeline, the charts and the <b>evidence behind every number</b>
+                    appear with the answer. Ask a follow-up and the conversation carries over.
+                </dd>
+            </dl>
             <div id="tape"></div>
             <div id="settings">
                 <label data-tip="Speed of the scrolling price tape. Off stops it; you can then scroll it by hand.">Tape <select id="tape-speed"></select></label>
@@ -576,7 +691,7 @@
             </div>
             <div id="messages"></div>
             <div id="input-area">
-                <input type="text" id="user-input" placeholder="Ask about a stock's return, risk against a benchmark, news or SEC filings..." autocomplete="off" />
+                <input type="text" id="user-input" placeholder="Which pairs in the energy sector are viable? Is LMT a good pair with RTX?" autocomplete="off" />
                 <button class="solid" id="send-btn">Send</button>
             </div>
             <footer>Research only, not investment advice. Prices ~15 min delayed (the last close when the market is shut); news and SEC filings same day.</footer>
@@ -752,6 +867,49 @@
                 messages.insertBefore(row, before);
             }
 
+            // The fan-out to scale. Every bar is positioned from the started_at/ended_at the
+            // recorder stamps, so overlap here is evidence, not decoration: the Lead reports one
+            // `research` call however many researchers it started, and this is what shows the
+            // difference between four in parallel and four in sequence.
+            function addTimeline(calls, before) {
+                const spans = calls.filter((c) => typeof c.started_at === "number" && c.ended_at >= c.started_at);
+                const researchers = spans.filter((c) => c.name === "researcher");
+                if (researchers.length < 2) return; // nothing to show about parallelism
+                const t0 = Math.min(...spans.map((c) => c.started_at));
+                const t1 = Math.max(...spans.map((c) => c.ended_at));
+                const width = Math.max(t1 - t0, 0.001);
+
+                const box = make("div", "timeline");
+                box.append(make("div", "tl-head", "AGENT TIMELINE"));
+                for (const call of [...spans].sort((a, b) => a.started_at - b.started_at)) {
+                    const row = make("div", "tl-row");
+                    const track = make("div", "tl-track");
+                    const bar = make("div", "tl-bar");
+                    if (call.name === "researcher") bar.classList.add("researcher");
+                    else if (call.agent === "Lead") bar.classList.add("lead");
+                    // A zero-length call at the very end sits at left:100%, so the minimum width
+                    // would hang past the track. Clamp the start, never the width, so a short call
+                    // stays visible.
+                    const w = Math.max(((call.ended_at - call.started_at) / width) * 100, 0.6);
+                    bar.style.left = Math.min(((call.started_at - t0) / width) * 100, 100 - w) + "%";
+                    bar.style.width = w + "%";
+                    bar.title = call.agent + " - " + call.name;
+                    track.append(bar);
+                    const label = call.name === "researcher" ? call.agent : call.agent + " / " + call.name;
+                    row.append(make("div", "tl-name", label), track,
+                               make("div", "tl-dur", (call.ended_at - call.started_at).toFixed(1) + "s"));
+                    box.append(row);
+                }
+
+                // Summed work against wall-clock span: the speedup the fan-out actually bought.
+                const work = researchers.reduce((n, c) => n + (c.ended_at - c.started_at), 0);
+                const span = Math.max(...researchers.map((c) => c.ended_at)) - Math.min(...researchers.map((c) => c.started_at));
+                box.append(make("div", "tl-note",
+                    researchers.length + " researchers - " + work.toFixed(1) + "s of work in " +
+                    span.toFixed(1) + "s (" + (work / Math.max(span, 0.001)).toFixed(1) + "x)"));
+                messages.insertBefore(box, before);
+            }
+
             // One collapsible line per tool call the harness ran, shown above the answer
             function addToolCall(call, before) {
                 // Tool results are JSON, but never trust that: a broken result must not kill the transcript.
@@ -881,6 +1039,7 @@
                     if (!res.ok) throw new Error(typeof data.detail === "string" ? data.detail : "the server returned " + res.status);
                     sessionId = data.session_id;
                     addRun(model, data.tool_calls.length, loading);
+                    addTimeline(data.tool_calls, loading);
                     for (const call of data.tool_calls) addToolCall(call, loading);
                     addCharts(data.charts || [], loading);
                     content.replaceChildren();
