@@ -1,0 +1,102 @@
+{
+  "table": "instruments",
+  "row_count": 625,
+  "description": "One row per instrument in the screening universe: S&P 500 companies and curated ETFs. Static reference data only - no prices, correlations or statistics live here.",
+  "columns": [
+    {
+      "name": "symbol",
+      "type": "VARCHAR",
+      "description": "Cboe ticker, the spelling every price tool takes. E.g. 'NVDA', 'BRK.B'."
+    },
+    {
+      "name": "sec_symbol",
+      "type": "VARCHAR",
+      "description": "SEC ticker spelling, which uses '-' for share classes. E.g. 'BRK-B'."
+    },
+    {
+      "name": "name",
+      "type": "VARCHAR",
+      "description": "Company or fund name from the listing directory. Rarely NULL when that directory omits a fund; the symbol still trades."
+    },
+    {
+      "name": "type",
+      "type": "VARCHAR",
+      "description": "'stock' or 'etf'.",
+      "enum_values": [
+        "etf",
+        "stock"
+      ]
+    },
+    {
+      "name": "is_etf",
+      "type": "BOOLEAN",
+      "description": "True for an exchange-traded fund, false for an operating company."
+    },
+    {
+      "name": "in_sp500",
+      "type": "BOOLEAN",
+      "description": "True if the name is an S&P 500 constituent."
+    },
+    {
+      "name": "cik",
+      "type": "BIGINT",
+      "description": "SEC Central Index Key. NULL for most ETFs, which are not SEC filers."
+    },
+    {
+      "name": "gics_sector",
+      "type": "VARCHAR",
+      "description": "GICS sector, the standard equity classification. Prefer this for resolving a sector to its symbols.",
+      "enum_values": [
+        "Communication Services",
+        "Consumer Discretionary",
+        "Consumer Staples",
+        "Energy",
+        "Exchange-Traded Fund",
+        "Financials",
+        "Health Care",
+        "Industrials",
+        "Information Technology",
+        "Materials",
+        "Real Estate",
+        "Utilities"
+      ]
+    },
+    {
+      "name": "gics_sub_industry",
+      "type": "VARCHAR",
+      "description": "GICS sub-industry, a much finer grouping. Best for finding close substitutes to pair."
+    },
+    {
+      "name": "etf_family",
+      "type": "VARCHAR",
+      "description": "Which curated ETF family the fund belongs to. NULL for stocks.",
+      "enum_values": [
+        "bond",
+        "broad_us",
+        "commodity",
+        "dow_leveraged",
+        "equal_weight",
+        "factor",
+        "international",
+        "nasdaq_leveraged",
+        "russell_leveraged",
+        "sector_spdr",
+        "sp500_leveraged",
+        "style",
+        "thematic",
+        "vanguard_sector",
+        "volatility"
+      ]
+    },
+    {
+      "name": "leverage",
+      "type": "DOUBLE",
+      "description": "Stated daily multiple of the underlying: 3.0 for TQQQ, -1.0 for SH, 1.0 for a plain fund."
+    },
+    {
+      "name": "underlying",
+      "type": "VARCHAR",
+      "description": "The fund this one tracks a multiple of, when there is one. E.g. TQQQ -> QQQ."
+    }
+  ]
+}

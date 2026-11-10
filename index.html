@@ -4,7 +4,7 @@
         <meta charset="UTF-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1.0" />
         <meta name="theme-color" content="#000000" />
-        <title>TICKER - Markets Research Agent</title>
+        <title>CONVERGE - Pair Trading Research Agent</title>
         <style>
             :root {
                 --amber: #ffb000;
@@ -302,7 +302,7 @@
             .msg,
             details.tool,
             div.run,
-            img.chart {
+            div.chart {
                 animation: rise 0.25s ease-out backwards; /* backwards only: a held end state would block the hover transforms */
             }
             @keyframes rise {
@@ -421,13 +421,6 @@
             div.run b:not(:first-child) {
                 margin-left: 1.5rem;
             }
-            div.run.limit,
-            div.run.limit b {
-                color: var(--red);
-            }
-            div.run.limit {
-                border-left-color: var(--red);
-            }
             details.tool summary::after {
                 content: "click to show result";
                 float: right;
@@ -441,12 +434,37 @@
                 margin-top: 0.4rem;
                 color: #b8b8b8;
             }
-            img.chart {
+            div.chart {
                 width: 100%;
                 max-width: 720px;
-                aspect-ratio: 720 / 300;
+                min-width: 0; /* a flex item defaults to min-content, which would refuse to shrink */
                 border: 1px solid var(--line);
                 border-radius: 6px;
+            }
+            /* The move across whatever window is zoomed to, under its chart. */
+            div.chart-note {
+                max-width: 720px;
+                margin-top: -4px;
+                font-size: 11px;
+                color: var(--faint);
+                display: flex;
+                gap: 8px;
+                align-items: baseline;
+            }
+            div.chart-note b {
+                color: var(--dim);
+                font-weight: 400;
+                letter-spacing: 0.08em;
+            }
+            /* Plotly's mode bar defaults to a light theme, which fights the terminal look. */
+            div.chart .modebar {
+                background: transparent !important;
+            }
+            div.chart .modebar-btn path {
+                fill: var(--faint) !important;
+            }
+            div.chart .modebar-btn:hover path {
+                fill: var(--amber) !important;
             }
 
             #input-area {
@@ -496,12 +514,18 @@
                 .msg,
                 details.tool,
                 div.run,
-                img.chart,
+                div.chart,
                 .msg.loading .content::after {
                     animation: none;
                 }
             }
             @media (max-width: 640px) {
+                div.chart {
+                    border-radius: 4px;
+                }
+                div.chart-note {
+                    font-size: 10px;
+                }
                 body {
                     padding: 0;
                 }
@@ -540,8 +564,8 @@
         <div id="tip"></div>
         <div id="container">
             <header>
-                <span class="name">TICKER</span>
-                <span class="tagline">AI research agent for stocks, options, news and filings</span>
+                <span class="name">CONVERGE</span>
+                <span class="tagline">Deep research agent for US equity and ETF pair trades</span>
                 <button class="solid" id="new-btn">New session</button>
             </header>
             <div id="tape"></div>
@@ -549,29 +573,32 @@
                 <label data-tip="Speed of the scrolling price tape. Off stops it; you can then scroll it by hand.">Tape <select id="tape-speed"></select></label>
                 <label class="left" data-tip="How often the background dots flash. Off stops them.">Twinkle <select id="twinkle"></select></label>
                 <label data-tip="Which Gemini model answers. Flash-Lite is the fastest and cheapest, Flash is stronger but slower. You can switch mid-chat and the conversation carries over.">Model <select id="model"></select></label>
-                <label data-tip="Most tools the agent may call per question. It then answers with what it has.">Tool limit <select id="limit"></select></label>
             </div>
             <div id="messages"></div>
             <div id="input-area">
-                <input type="text" id="user-input" placeholder="Ask about a stock, its options, news or SEC filings..." autocomplete="off" />
+                <input type="text" id="user-input" placeholder="Ask about a stock's return, risk against a benchmark, news or SEC filings..." autocomplete="off" />
                 <button class="solid" id="send-btn">Send</button>
             </div>
-            <footer>Research only, not investment advice. Prices and options ~15 min delayed; news and SEC filings same day.</footer>
+            <footer>Research only, not investment advice. Prices ~15 min delayed (the last close when the market is shut); news and SEC filings same day.</footer>
         </div>
+        <!-- Plotly from our own server, not a CDN: a blocked CDN would mean no charts at all.
+             app.py fills in the versioned path so the long cache header is safe. -->
+        <script src="__PLOTLY_SRC__"></script>
         <script>
+            // The models and the tape quotes are injected by app.py when it serves this page.
+            const config = __CONFIG__;
             const messages = document.getElementById("messages");
             const userInput = document.getElementById("user-input");
             const sendBtn = document.getElementById("send-btn");
             const modelSelect = document.getElementById("model");
-            const limitSelect = document.getElementById("limit");
             const twinkleSelect = document.getElementById("twinkle");
             const tapeSelect = document.getElementById("tape-speed");
             const tape = document.getElementById("tape");
             let sessionId = null;
 
             const EXAMPLES = [
-                "What's NVDA trading at, and what is the options market implying for its next-expiry move?",
-                "TSLA jumped on October 2. What happened?",
+                "What was SPY's return and realized volatility over the last year?",
+                "How risky is NVDA against SPY over the last two years?",
                 "Chart AAPL's price over the last 6 months.",
             ];
 
@@ -583,8 +610,6 @@
                 return node;
             }
 
-            // The models and the limit range are defined once in app.py, which fills in __CONFIG__ when it serves this page.
-            const config = __CONFIG__;
             // Tape and twinkle speeds: time per loop or flash as a multiple of the Normal setting in the stylesheet (bigger is slower, 0 is off).
             const SPEEDS = { Off: 0, Slow: 1.5, Normal: 1, Fast: 0.6 };
             function fillSelect(select, names, selected) {
@@ -592,7 +617,6 @@
                 select.value = selected;
             }
             fillSelect(modelSelect, config.models, config.default_model);
-            fillSelect(limitSelect, Array.from({ length: config.max_tool_calls }, (_, i) => i + 1), config.default_tool_calls);
             fillSelect(tapeSelect, Object.keys(SPEEDS), "Normal");
             fillSelect(twinkleSelect, Object.keys(SPEEDS), "Normal");
 
@@ -680,8 +704,8 @@
                 const intro = make(
                     "div",
                     "intro",
-                    "Ticker pulls live market data with tools and shows every call it makes. " +
-                        "Covers US stocks, ETFs, indices, listed options, news headlines and SEC filings. Try:",
+                    "Converge pulls market data with tools and shows every call it makes. " +
+                        "Covers US stocks, ETFs and indices: prices, risk metrics, charts, news and SEC filings. Try:",
                 );
                 for (const q of EXAMPLES) {
                     const button = make("button", "", q);
@@ -715,41 +739,124 @@
                 const message = make("div", "msg " + role + (isLoading ? " loading" : ""));
                 const content = make("div", "content");
                 renderText(content, text);
-                message.append(make("div", "role", role === "user" ? "YOU" : "TICKER"), content);
+                message.append(make("div", "role", role === "user" ? "YOU" : "CONVERGE"), content);
                 messages.append(message);
                 messages.scrollTop = messages.scrollHeight;
                 return message;
             }
 
-            // Which model and tool limit produced this answer, and how many calls it used
-            function addRun(model, limit, used, before) {
+            // Which model answered and how many tool calls it took
+            function addRun(model, used, before) {
                 const row = make("div", "run");
-                row.append(make("b", "", "MODEL"), model, make("b", "", "TOOL LIMIT"), `${limit} (${used} used)`);
-                messages.insertBefore(row, before);
-            }
-
-            // Shown in red when the agent used its whole tool limit and had to answer without more calls
-            function addLimitNotice(limit, before) {
-                const row = make("div", "run limit");
-                row.append(make("b", "", "TOOL LIMIT REACHED"), `all ${limit} call${Number(limit) === 1 ? "" : "s"} used, so the answer uses what was fetched`);
+                row.append(make("b", "", "MODEL"), model, make("b", "", "TOOL CALLS"), String(used));
                 messages.insertBefore(row, before);
             }
 
             // One collapsible line per tool call the harness ran, shown above the answer
             function addToolCall(call, before) {
-                const { chart_svg, ...result } = JSON.parse(call.result); // the chart is drawn below, not shown as JSON
+                // Tool results are JSON, but never trust that: a broken result must not kill the transcript.
+                let result;
+                try {
+                    result = JSON.parse(call.result);
+                } catch (e) {
+                    result = { result: call.result };
+                }
                 const args = Object.entries(call.args).map(([k, v]) => k + "=" + JSON.stringify(v)).join(", ");
                 const summary = make("summary");
-                summary.append(make("b", "", "TOOL CALL"), call.name + "(" + args + ")");
+                summary.append(make("b", "", call.agent ? call.agent.toUpperCase() : "TOOL CALL"), call.name + "(" + args + ")");
                 const details = make("details", "tool");
                 details.append(summary, make("pre", "", JSON.stringify(result, null, 2)));
                 messages.insertBefore(details, before);
-                if (chart_svg) {
-                    const chart = make("img", "chart"); // an <img> never runs scripts, so the SVG is safe to show
-                    chart.alt = "Price chart";
-                    chart.src = "data:image/svg+xml;charset=utf-8," + encodeURIComponent(chart_svg);
-                    messages.insertBefore(chart, before);
+            }
+
+            // Charts come back in their own field, not inside a tool result, so the model never
+            // carries a figure in its context. Each is a Plotly spec built in chart.py.
+            function addCharts(charts, before) {
+                for (const { symbol, figure } of charts) {
+                    // One bad figure must not cost the user the model's written answer, which is
+                    // rendered after this loop.
+                    try {
+                        const node = make("div", "chart");
+                        node.setAttribute("role", "img");
+                        node.setAttribute("aria-label", symbol + " chart");
+                        messages.insertBefore(node, before);
+                        Plotly.newPlot(node, figure.data, figure.layout, PLOTLY_CONFIG)
+                            .then(() => {
+                                reportRange(node);
+                                watchSize(node);
+                            })
+                            .catch(() => (node.textContent = symbol + " chart failed to render"));
+                    } catch (e) {
+                        /* keep the transcript and the answer */
+                    }
                 }
+            }
+
+            // Plotly's responsive mode only listens for WINDOW resizes, so a chart whose container
+            // changes for any other reason (a reflow, the pane growing) keeps its old size. Watch
+            // the element itself, and pick a height from its width so it stays readable on a phone
+            // and uses the space on a desktop. Tables size themselves in chart.py, so leave those.
+            function watchSize(node) {
+                const isTable = (node.data || []).some((d) => d.type === "table");
+                if (isTable) return;
+                let last = 0;
+                const observer = new ResizeObserver(() => {
+                    const width = node.clientWidth;
+                    if (!width || Math.abs(width - last) < 8) return; // ignore sub-pixel churn
+                    last = width;
+                    // Taller relative to width when narrow, so a phone still shows a usable plot.
+                    const height = Math.round(Math.min(360, Math.max(200, width * (width < 480 ? 0.78 : 0.46))));
+                    Plotly.relayout(node, { height, width: null }).catch(() => observer.disconnect());
+                });
+                observer.observe(node);
+            }
+
+            // Plotly's own chrome, trimmed to what is useful here: drag to zoom, double-click to
+            // reset, and a PNG download. The rest of the mode bar is noise for a price chart.
+            const PLOTLY_CONFIG = {
+                responsive: true,
+                displaylogo: false,
+                modeBarButtonsToRemove: ["select2d", "lasso2d", "autoScale2d", "toggleSpikelines"],
+                toImageButtonOptions: { filename: "converge-chart", scale: 2 },
+            };
+
+            // Zooming an x-range is how you ask "what happened between these two dates?", so answer
+            // it: report the move across whatever window is on screen.
+            function reportRange(node) {
+                const trace = (node.data || []).find((d) => d.type !== "table" && d.y && d.y.length > 1);
+                if (!trace) return;
+                const note = make("div", "chart-note");
+                node.after(note);
+                const update = (range) => {
+                    let lo = 0, hi = trace.y.length - 1;
+                    if (range) {
+                        // A string compare is safe here: both sides are ISO date strings, and
+                        // Plotly reports a date-axis range as "YYYY-MM-DD[ HH:MM...]".
+                        const within = trace.x.map((x, i) => [x, i]).filter(([x]) => x >= range[0] && x <= range[1]);
+                        if (within.length > 1) {
+                            lo = within[0][1];
+                            hi = within[within.length - 1][1];
+                        } else {
+                            // Fewer than two points in view: say so rather than quietly falling
+                            // back to the whole series, which would report the wrong return.
+                            note.replaceChildren(make("b", "", "SELECTED"), "too narrow to measure");
+                            return;
+                        }
+                    }
+                    const from = trace.y[lo], to = trace.y[hi];
+                    if (!from) return;
+                    const pct = (to / from - 1) * 100;
+                    // Endpoints come from the thinned series the chart plots, so on a multi-year
+                    // range they can sit a few sessions either side of the exact drag.
+                    note.replaceChildren(make("b", "", "SELECTED"), trace.x[lo] + " \u2192 " + trace.x[hi] + "  ");
+                    colorize(note, (pct >= 0 ? "+" : "") + pct.toFixed(2) + "%");
+                };
+                update(null);
+                node.on("plotly_relayout", (e) => {
+                    if (e["xaxis.autorange"]) return update(null);
+                    const lo = e["xaxis.range[0]"], hi = e["xaxis.range[1]"];
+                    if (lo !== undefined) update([lo, hi]);
+                });
             }
 
             async function send(forcedText) {
@@ -762,20 +869,20 @@
                 addMessage("user", text);
                 const loading = addMessage("assistant", "Fetching data...", true);
                 const content = loading.querySelector(".content");
-                const model = modelSelect.value, limit = limitSelect.value; // what this question is sent with
+                const model = modelSelect.value; // what this question is sent with
 
                 try {
                     const res = await fetch("/chat", {
                         method: "POST",
                         headers: { "Content-Type": "application/json" },
-                        body: JSON.stringify({ message: text, session_id: sessionId, model, tool_call_limit: Number(limit) }),
+                        body: JSON.stringify({ message: text, session_id: sessionId, model }),
                     });
                     const data = await res.json().catch(() => ({})); // an error page is not JSON
                     if (!res.ok) throw new Error(typeof data.detail === "string" ? data.detail : "the server returned " + res.status);
                     sessionId = data.session_id;
-                    addRun(model, limit, data.tool_calls.length, loading);
+                    addRun(model, data.tool_calls.length, loading);
                     for (const call of data.tool_calls) addToolCall(call, loading);
-                    if (data.tool_calls.length >= Number(limit)) addLimitNotice(limit, loading);
+                    addCharts(data.charts || [], loading);
                     content.replaceChildren();
                     renderText(content, data.response);
                 } catch (e) {

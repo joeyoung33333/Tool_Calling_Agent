@@ -1,1 +1,5 @@
-{"deploy_url": "https://tool-calling-agent-git-llmb6vmaoa-nn.a.run.app", "authors": ["jay2147"]}
+{
+  "deploy_url": "https://tool-calling-agent-git-llmb6vmaoa-nn.a.run.app",
+  "authors": ["jay2147"],
+  "path": "research"
+}

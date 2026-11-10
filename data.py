@@ -1,25 +1,30 @@
-"""Market-data fetchers (free, no API keys): Cboe (stocks, ETFs, indices, options), Google News (headlines),
-SEC EDGAR (company filings), the Nasdaq Trader symbol directory (names to tickers) and US Treasury (bill rates).
-Equities only.
+"""Market and filing data fetchers (free, no API keys). Only dependency: requests.
 
-Public API, keyed by `symbol` (e.g. 'NVDA', 'SPY', 'VIX') or `query`, with `start`/`end` dates for ranges:
-    search_symbol(query)                   tickers for a company or fund name
+Sources: Cboe (stocks, ETFs, indices - daily bars and quotes), SEC EDGAR (filings) and the Nasdaq
+Trader symbol directory. US equities only.
+
+Every function raises DataError on failure, with a message written for the model to act on.
+
+Caching: reference data (published daily bars, the symbol directory, the CIK map, SEC submissions)
+is cached for the life of the process because it does not change. Live quotes and headlines are
+never cached.
+
+    price(symbol)                          latest quote: price, bid/ask, volume, 30-day IV
+    price_history(symbol, start, end)      daily bars, oldest first
+    news(query, start, end)                headlines, newest first; no dates means the last 7 days
+    filings(symbol, start, end)            SEC filings, newest first; no dates means the latest
     company_name(symbol)                   the listed name of a stock or ETF
-    risk_free_rate(start, end)             average 3-month Treasury bill yield, % a year
-    price(symbol)                          latest price snapshot
-    price_history(symbol, start, end)      daily bars
-    option_chain(symbol)                   latest option chain
-    news(query, start, end)                headlines, newest first; no start/end means the last 7 days
-    filings(symbol, start, end)            SEC filings, newest first; no start/end means the latest ones
+    cik_for(symbol)                        SEC CIK for a ticker
+    eastern_now()                          now in US Eastern, the market's clock
+    clean(raw)                             '$nvda' -> 'NVDA'; rejects names and crypto
 """
 
-import csv
 import functools
 import re
-import statistics
 import xml.etree.ElementTree as ET
-from datetime import date, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import requests
 
@@ -28,18 +33,17 @@ _NEWS = "https://news.google.com/rss/search"
 _SEC = "https://data.sec.gov"
 _SEC_TICKERS = "https://www.sec.gov/include/ticker.txt"
 _SYMBOLS = "https://www.nasdaqtrader.com/dynamic/symdir"
-_TREASURY = "https://home.treasury.gov/resource-center/data-chart-center/interest-rates/daily-treasury-rates.csv"
-# SEC asks clients to identify themselves
-_UA = "Mozilla/5.0 (compatible; ticker-agent/1.0; Columbia IEOR-4570 class project)"
+# Sent to every feed, including SEC. Generic on purpose: no personal contact details anywhere.
+_UA = "Mozilla/5.0 (compatible; converge-agent/1.0; Columbia IEOR-4570 class project)"
 
 _TICKER = re.compile(r"[A-Z][A-Z0-9.]{0,9}")  # 'NVDA', 'BRK.B'
-_INDICES = {"VIX", "SPX", "NDX", "RUT"}  # Cboe prefixes index symbols with an underscore
-# Crypto is not supported. Some of these are also real ETF tickers (BTC is a Grayscale fund), so block them
-# rather than let a fund's price pass as the coin's price.
+# Cboe prefixes index symbols with an underscore.
+_INDICES = {"VIX", "SPX", "RUT"}
+# Symbols this feed lacks, with the nearest thing it has: rejected up front, since a bare 403 tells the model nothing.
+_NO_DATA = {"NDX": "NDX is not on this feed. Use QQQ, the ETF that tracks the Nasdaq-100."}
+# Crypto is unsupported. Some double as ETF tickers (BTC is a Grayscale fund), so block them rather than pass a fund's price.
 _CRYPTO = {"BTC", "ETH", "XBT", "LTC", "SOL", "XRP", "DOGE", "ADA", "BITCOIN", "ETHEREUM"}
-
-# Nicknames that are not in legal names; and directory rows that are not the stock itself
-_NICKNAMES = {"google": "alphabet", "youtube": "alphabet", "facebook": "meta platforms"}
+# Used by _symbol_directory(): directory rows that are not the common stock itself.
 _NOT_STOCK = re.compile(r"warrant|\brights\b|\bunits?\b|preferred|\bnotes?\b", re.I)
 
 _SEC_ITEMS = {
@@ -53,6 +57,17 @@ _SEC_ITEMS = {
 _SEC_FORMS = {"10-K": "Annual report", "10-Q": "Quarterly report"}
 
 
+def eastern_now() -> datetime:
+    """Now in US Eastern time, where the markets are (UTC if the machine has no time-zone data).
+
+    Shared because both the price tape and the agent's instructions need today's market date.
+    """
+    try:
+        return datetime.now(ZoneInfo("America/New_York"))
+    except ZoneInfoNotFoundError:
+        return datetime.now(timezone.utc)
+
+
 class DataError(Exception):
     """A failure whose message is written for the model: what went wrong and what to try."""
 
@@ -63,8 +78,12 @@ def _fetch(url: str, **params) -> requests.Response:
         r = requests.get(url, params=params, headers={"User-Agent": _UA}, timeout=15)
     except requests.RequestException as e:
         raise DataError(f"Could not reach {host} ({type(e).__name__}). Try again shortly.")
-    if r.status_code in (403, 404):  # Cboe answers 403 for a symbol it does not know
-        raise DataError(f"{host} has no data for this request. If you gave a ticker, use a US-listed stock, ETF or index like 'NVDA', 'SPY' or 'VIX'. If you gave a company name, call search_symbol to find its ticker.")
+    if r.status_code in (403, 404):
+        # Cboe answers 403, not 404, for a symbol it does not carry, so both mean "unavailable here".
+        raise DataError(
+            f"{host} has no data for this request: the symbol is not available on this feed. "
+            "Use a US-listed stock, ETF or index ticker such as 'NVDA', 'SPY' or 'VIX'."
+        )
     if r.status_code >= 400:
         raise DataError(f"{host} returned HTTP {r.status_code}. Try again shortly.")
     return r
@@ -82,7 +101,9 @@ def clean(raw: str) -> str:
     symbol = re.sub(r"[-/]USD$", "", (raw or "").strip().upper().lstrip("$^"))  # 'BTC-USD' -> 'BTC' so crypto is caught
     symbol = symbol.replace("-", ".")  # share classes: 'BRK-B' -> 'BRK.B'
     if not _TICKER.fullmatch(symbol):
-        raise DataError(f"'{raw}' is not a ticker. Pass a symbol like 'NVDA', 'SPY' or 'VIX'. For a company name, call search_symbol first.")
+        raise DataError(f"'{raw}' is not a ticker. Pass a symbol like 'NVDA', 'SPY' or 'VIX'.")
+    if symbol in _NO_DATA:
+        raise DataError(_NO_DATA[symbol])
     if symbol in _CRYPTO:
         raise DataError(
             f"Crypto is not supported, so '{raw}' is rejected (on US exchanges 'BTC' and 'ETH' are unrelated ETFs). "
@@ -103,13 +124,12 @@ def _current_price(d: dict) -> float:
 
 def price(symbol: str) -> dict:
     s = clean(symbol)
-    # Cboe quote: {"data": {"symbol": "NVDA", "current_price": 234.22, "close": 233.95, "price_change": 3.09,
-    #   "price_change_percent": 1.3208, "bid": 234.22, "ask": 234.24, "high": 237.88, "low": 233.6,
-    #   "volume": 135167817, "iv30": 28.966, "last_trade_time": "2026-10-02T15:59:59"}}   times are US Eastern
+    # Cboe quote fields: current_price, close, price_change, price_change_percent, bid, ask, open, high, low, volume, iv30, last_trade_time (ET).
     d = _json(f"{_CBOE}/quotes/{_cboe(s)}.json")["data"]
     return {
         "symbol": s,
         "price": _current_price(d),
+        "open": d["open"],
         "change": d["price_change"],
         "change_pct": d["price_change_percent"],
         "bid": d["bid"],
@@ -124,49 +144,58 @@ def price(symbol: str) -> dict:
     }
 
 
-def price_history(symbol: str, start: date, end: date | None = None) -> list[dict]:
-    """Daily bars (date, high, low, close, volume) from `start` to `end` (default today), oldest first."""
+@functools.lru_cache(maxsize=64)
+def _published_bars(symbol: str) -> tuple[dict, ...]:
+    """Every daily bar Cboe publishes for `symbol`, oldest first.
+
+    Cached because a pair screen fetches each leg once and then every pair, episode and backtest
+    re-reads the same series: 25 symbols answer 300 pairs. Bounded at 64 because the widest screen
+    is a 40-name universe and each series is a few hundred KB. Published bars never change, so this
+    is safe for the life of the process; the live top-up in price_history() stays uncached.
+    """
     s = clean(symbol)
-    # Cboe history: {"data": [{"date": "2026-10-01", "open": 230.0, "high": 232.29, "low": 228.16, "close": 230.86,
-    #   "volume": 98591411}, ...]}   index rows hold strings ("16.150000") and the latest session is missing
+    # Cboe history rows: date, open, high, low, close, volume. Index rows hold strings ("16.150000") and omit the latest session.
     rows = _json(f"{_CBOE}/charts/historical/{_cboe(s)}.json")["data"]
-    bars = [{"date": r["date"], "high": float(r["high"]), "low": float(r["low"]), "close": float(r["close"]), "volume": float(r["volume"] or 0)} for r in rows]
-    latest = price(s)  # add the latest session from the live quote
-    if not bars or latest["as_of"][:10] > bars[-1]["date"]:
-        bars.append({"date": latest["as_of"][:10], "high": latest["high"], "low": latest["low"], "close": latest["price"], "volume": latest["volume"]})
+    bars = [
+        {
+            "date": r["date"],
+            "open": float(r["open"]),
+            "high": float(r["high"]),
+            "low": float(r["low"]),
+            "close": float(r["close"]),
+            "volume": float(r["volume"] or 0),
+        }
+        for r in rows
+    ]
+    return tuple(bars)
+
+
+def price_history(symbol: str, start: date, end: date | None = None) -> list[dict]:
+    """Daily bars (date, open, high, low, close, volume) from `start` to `end` (default today), oldest first."""
+    s = clean(symbol)
+    bars = list(_published_bars(s))
     last = (end or date.today()).isoformat()
+    if bars and last <= bars[-1]["date"]:
+        return [b for b in bars if start.isoformat() <= b["date"] <= last]  # wholly historical
+    latest = price(s)  # the published bars stop short of today, so top up from the live quote
+    if not bars or latest["as_of"][:10] > bars[-1]["date"]:
+        bars.append({
+            "date": latest["as_of"][:10],
+            "open": latest["open"],
+            "high": latest["high"],
+            "low": latest["low"],
+            "close": latest["price"],
+            "volume": latest["volume"],
+        })
     return [b for b in bars if start.isoformat() <= b["date"] <= last]
 
 
-def option_chain(symbol: str) -> dict:
-    s = clean(symbol)
-    # Cboe options: {"data": {"current_price": 234.22, "close": 233.95, "last_trade_time": "2026-10-02T15:59:59",
-    #   "options": [{"option": "NVDA261007C00235000", "bid": 2.19, "ask": 2.25, "iv": 0.2442, "delta": 0.4442,
-    #   "open_interest": 2925.0, "volume": 120.0, "last_trade_price": 2.2}, ...]}}   option = root + YYMMDD + C/P + strike*1000
-    d = _json(f"{_CBOE}/options/{_cboe(s)}.json")["data"]
-    contracts = []
-    for o in d["options"]:
-        m = re.match(r"^.+?(\d{2})(\d{2})(\d{2})([CP])(\d{8})$", o["option"])
-        if m:
-            contracts.append({
-                "expiry": f"20{m[1]}-{m[2]}-{m[3]}",
-                "type": "call" if m[4] == "C" else "put",
-                "strike": int(m[5]) / 1000,
-                "bid": o["bid"],
-                "ask": o["ask"],
-                "last": o["last_trade_price"],
-                "iv_pct": round(o["iv"] * 100, 2),
-                "delta": o["delta"],
-                "open_interest": o["open_interest"],
-                "volume": o["volume"],
-            })
-    return {"symbol": s, "spot": _current_price(d), "as_of": d["last_trade_time"], "contracts": contracts}
-
 
 def news(query: str, start: date | None = None, end: date | None = None, limit: int = 20) -> list[dict]:
-    """Google News headlines for a ticker or keywords, newest first. No start/end means the last 7 days."""
-    if (start is None) != (end is None):
-        raise DataError("Pass both start and end for a date range, or neither for the last 7 days.")
+    """Google News headlines for a ticker or keywords, newest first. No start/end means the last 7 days.
+
+    Pass both dates or neither; tools._optional_range is what validates model-supplied dates.
+    """
     q = (query or "").strip()
     if not q:
         raise DataError("'query' is empty. Pass a ticker like 'NVDA' or keywords like 'Fed rate decision'.")
@@ -174,8 +203,7 @@ def news(query: str, start: date | None = None, end: date | None = None, limit: 
         q += " stock"  # a bare ticker is ambiguous, so bias towards market news
     # Google's `before:` is exclusive, so add a day to include `end`.
     q += f" after:{start} before:{end + timedelta(days=1)}" if start else " when:7d"
-    # Google News RSS (up to 100 items): <item><title>NVIDIA Announces ... - NVIDIA Newsroom</title><link>https://news.google.com/rss/articles/CBMi...</link>
-    #   <pubDate>Mon, 28 Sep 2026 17:02:51 GMT</pubDate><source url="https://nvidianews.nvidia.com">NVIDIA Newsroom</source></item>
+    # Google News RSS, up to 100 items: each <item> carries title, link, pubDate and a <source url=...> publisher name.
     try:
         root = ET.fromstring(_fetch(_NEWS, q=q, hl="en-US", gl="US", ceid="US:en").content)
     except ET.ParseError:
@@ -203,17 +231,38 @@ def _sec_ciks() -> dict[str, int]:
     return {ticker.upper(): int(cik) for ticker, cik in zip(lines[::2], lines[1::2])}
 
 
-def filings(symbol: str, start: date | None = None, end: date | None = None, limit: int = 20) -> list[dict]:
-    """SEC 8-K (events), 10-K and 10-Q (reports) for a US-listed company, newest first. No start/end means the latest."""
-    s = clean(symbol)
-    if (start is None) != (end is None):
-        raise DataError("Pass both start and end for a date range, or neither for the latest filings.")
-    cik = _sec_ciks().get(s.replace(".", "-"))  # SEC writes share classes as BRK-B
+# Cached: filings() is called once per symbol per episode, and each record is ~1 MB.
+@functools.lru_cache(maxsize=32)
+def _submissions(cik: int) -> dict:
+    """One company's SEC submissions record.
+
+    {"name": "LOCKHEED MARTIN CORP", "filings": {"recent": {"form": [...], "filingDate": [...]}}} -
+    the filing arrays are parallel, newest first, and hold roughly the last 1000 filings.
+    """
+    return _json(f"{_SEC}/submissions/CIK{cik:010d}.json")
+
+
+def cik_for(symbol: str) -> int:
+    """SEC CIK for a ticker. Raises if the symbol is not an SEC filer (ETFs and indices are not)."""
+    cik = _sec_ciks().get(clean(symbol).replace(".", "-"))  # SEC writes share classes as BRK-B
     if cik is None:
-        raise DataError(f"No SEC filings for '{s}'. Only companies file 8-Ks; ETFs and indices don't.")
-    # SEC submissions: {"filings": {"recent": {"accessionNumber": ["0001045810-26-000123", ...], "filingDate": ["2026-08-26", ...],
-    #   "form": ["10-Q", ...], "items": ["2.02,9.01", ...], "reportDate": ["2026-07-26", ...], "primaryDocument": [...]}}}   parallel arrays, newest first, ~1000 filings
-    recent = _json(f"{_SEC}/submissions/CIK{cik:010d}.json")["filings"]["recent"]
+        raise DataError(
+            f"'{symbol}' is not an SEC filer, so it has no filings. Indices never file. Most ETFs do "
+            "not either, though trust-structured ones such as SPY and QQQ do."
+        )
+    return cik
+
+
+
+
+def filings(symbol: str, start: date | None = None, end: date | None = None, limit: int = 20) -> list[dict]:
+    """SEC 8-K (events), 10-K and 10-Q for a US-listed company, newest first. No dates means the latest.
+
+    Pass both dates or neither; tools._optional_range is what validates model-supplied dates.
+    """
+    s = clean(symbol)
+    cik = cik_for(s)
+    recent = _submissions(cik)["filings"]["recent"]
     out = []
     for i, form in enumerate(recent["form"]):
         day = recent["filingDate"][i]
@@ -238,34 +287,14 @@ def filings(symbol: str, start: date | None = None, end: date | None = None, lim
     return out
 
 
-@functools.cache
-def _bill_rates(year: int) -> dict[str, float]:
-    """Date -> 3-month Treasury bill yield (% a year) for one year."""
-    # Treasury par yield curve CSV, one file per year: 'Date,"1 Mo","3 Mo",...' then '10/07/2026,4.07,4.22,...'
-    # (the columns differ between years, so read the "3 Mo" column by name). A restart refreshes the current year.
-    text = _fetch(f"{_TREASURY}/{year}/all", type="daily_treasury_yield_curve", field_tdr_date_value=year, page="", _format="csv").text
-    rates = {}
-    for row in csv.DictReader(text.splitlines()):
-        if row.get("3 Mo"):
-            month, day, y = row["Date"].split("/")
-            rates[f"{y}-{month}-{day}"] = float(row["3 Mo"])
-    return rates
-
-
-def risk_free_rate(start: date, end: date) -> float:
-    """Average 3-month Treasury bill yield in % a year from `start` to `end`."""
-    rates = [r for year in range(start.year, end.year + 1) for day, r in _bill_rates(year).items() if start.isoformat() <= day <= end.isoformat()]
-    if not rates:
-        raise DataError(f"No Treasury bill rates found from {start} to {end}.")
-    return statistics.fmean(rates)
 
 
 @functools.cache
 def _symbol_directory() -> list[tuple[str, str, bool]]:
     """(symbol, name, is_etf) for every listed stock and ETF, without test issues, warrants, rights, units or preferreds."""
-    # nasdaqlisted.txt: "Symbol|Security Name|Market Category|Test Issue|Financial Status|Round Lot Size|ETF|NextShares"
-    # otherlisted.txt:  "ACT Symbol|Security Name|Exchange|CQS Symbol|ETF|Round Lot Size|Test Issue|NASDAQ Symbol"
-    # Each starts with a header line and ends with a "File Creation Time" line; the symbol pattern skips that and preferreds ('JPM$J').
+    # nasdaqlisted.txt: Symbol|Security Name|Market Category|Test Issue|Financial Status|Round Lot Size|ETF|NextShares
+    # otherlisted.txt:  ACT Symbol|Security Name|Exchange|CQS Symbol|ETF|Round Lot Size|Test Issue|NASDAQ Symbol
+    # Both carry a header line and a trailing "File Creation Time" line; the symbol pattern skips those and preferreds ('JPM$J').
     rows = []
     for name, etf_column, test_column in (("nasdaqlisted", 6, 3), ("otherlisted", 4, 6)):
         for line in _fetch(f"{_SYMBOLS}/{name}.txt").text.splitlines()[1:]:
@@ -275,30 +304,7 @@ def _symbol_directory() -> list[tuple[str, str, bool]]:
     return rows
 
 
-def _squash(text: str) -> str:
-    return re.sub(r"[^a-z0-9]", "", text.lower())  # 'JP Morgan' and 'JPMorgan' both become 'jpmorgan'
-
-
 def company_name(symbol: str) -> str | None:
     """Listed name of a stock or ETF, or None (indices are not in the directory)."""
     name = next((name for s, name, _ in _symbol_directory() if s == symbol), None)
     return name and re.sub(r"\s+(-\s+)?(New\s+)?(Common|Capital)\s+Stock\s*$", "", name)  # 'NVIDIA Corporation - Common Stock' -> 'NVIDIA Corporation'
-
-
-def search_symbol(query: str) -> dict:
-    """Up to 5 tickers for a company or fund name, best first: an exact ticker, then names starting with the query, then names containing it."""
-    key = _squash(_NICKNAMES.get(_squash(query), query))
-    if not key:
-        raise DataError("Give a company or fund name to search for, like 'Nvidia' or 'S&P 500 ETF'.")
-    if key.upper() in _CRYPTO:
-        clean(key)  # raises the crypto message; 'BTC' is a real ETF ticker, so it must not pass as bitcoin
-    ticker = query.strip().upper().replace("-", ".")
-    found = []
-    for symbol, name, etf in _symbol_directory():
-        squashed = _squash(name)
-        if symbol == ticker or key in squashed:
-            found.append(((symbol != ticker, not squashed.startswith(key), etf, len(squashed)), symbol, name, etf))  # stocks before ETFs, shorter first
-    if not found:
-        raise DataError(f"No US-listed stock or ETF matches '{query.strip()[:60]}'. Try fewer words, such as the company's main name. Non-US companies and crypto are not covered.")
-    matches = [{"symbol": symbol, "name": name, "type": "ETF" if etf else "stock"} for _, symbol, name, etf in sorted(found)[:5]]
-    return {"query": query.strip(), "matches": matches, "source": "Nasdaq Trader symbol directory"}

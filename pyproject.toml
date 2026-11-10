@@ -1,12 +1,15 @@
 [project]
-name = "ticker-agent"
+name = "converge"
 version = "0.1.0"
-description = "Ticker: a tool-calling markets research agent over live and historical market data"
+description = "Converge: a deep-research agent that finds, tests and ranks statistical pair trades across US stocks and ETFs"
 requires-python = ">=3.10"
 dependencies = [
     "fastapi>=0.109.0",
     "uvicorn>=0.27.0",
-    "litellm>=1.50",
+    "openai-agents[litellm]>=0.24",
+    "litellm>=1.108",
     "google-cloud-aiplatform>=1.40.0",
+    "duckdb>=1.1",
     "requests>=2.31",
+    "plotly>=7.1.0",
 ]
