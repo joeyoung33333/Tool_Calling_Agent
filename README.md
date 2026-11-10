@@ -92,10 +92,28 @@ User-Agent that carries no personal contact details.
 
 ## Cloud Deployment
 
-Deployed on Google Cloud Run. Sign in with a Columbia Google account.
+Deployed on Google Cloud Run, built from `main` by a Cloud Build trigger. Sign in with a Columbia
+Google account.
 
 - https://tool-calling-agent-git-llmb6vmaoa-nn.a.run.app
 - Backup: https://tool-calling-agent-git-401765433529.northamerica-northeast1.run.app
+
+Service settings that matter, and why:
+
+| Setting | Value | Reason |
+|---|---|---|
+| `--timeout` | 900s | The default is 300s, exactly the grading window, so a slow screen would race the proxy |
+| `--memory` | 1Gi | Measured 307 MB at idle from imports alone, and ~400 MB during a screen. The 512 MB default leaves no room |
+| `--cpu` | 2 | Fitting every pair is CPU-bound: a 40-symbol universe is 780 regressions plus rolling betas |
+| `--min-instances` | 1 | Keeps one warm instance, so chat history survives between requests. Bills continuously; set back to 0 when not being marked |
+| `--max-instances` | 1 | Sessions live in one instance's memory, so a second instance would not see them |
+
+**Two things about state on Cloud Run.** The reference database (`data/refdata.duckdb`) is committed,
+so it ships inside the container image and is opened read-only - no setup, no writes, no WAL.
+Conversation history (`conversations.db`, SQLite) is different: Cloud Run's filesystem is in-memory,
+so history is per-instance and is lost on a restart, a new revision or a scale to zero. That is
+acceptable here because the agent is stateless between questions apart from the transcript, but it
+is a real limitation rather than a hidden one.
 
 ## Files
 
