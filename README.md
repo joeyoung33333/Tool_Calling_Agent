@@ -1,51 +1,79 @@
-# Ticker: A Markets Research Agent
+# Converge: A Pair-Trading Research Agent
 
-IEOR-E4570: Project 1
+IEOR-E4570: Project 2 — Deep Research
 
 Author: Joseph Young (jay2147)
 
-## Overview
+## The Question
 
-A chat agent for market research and analysis of US equities. It calls tools for live and historical prices, options, news headlines and SEC filings, then answers with prices, volatility, options-implied moves, news, and filings that may explain a price move. Every answer cites its source and data delay.
+> Given a sector, an ETF family, or a user's own idea, which pairs of US stocks and ETFs are viable
+> pair trades — correlated names whose prices move together, drift apart, then converge again? And
+> when a pair stays diverged for an unusually long stretch, what news explains it: a temporary
+> dislocation, or a relationship that has actually broken?
+
+Converge screens every combination up to a set limit, backtests the strongest candidates on data
+they were not chosen on, and ranks them on several metrics. Pairs are selected by Python, never by
+the model: the agent decides *what to investigate*, and the arithmetic decides *what survives*.
 
 For research only, not investment advice. Always double-check results.
 
-### Design Choices
+## Status
 
-- **Agent:** Gemini on Vertex AI via LiteLLM, in a tool-calling loop.
-- **Settings:** The UI allows model selection (four Gemini models) and setting a tool limit of 1 to 10 (default 5). At the limit, the agent answers with what it has, and the UI shows a red limit-reached notice.
-- **Tools:** 8 tools backed by external data sources (Cboe, Google News, SEC EDGAR, Nasdaq Trader, US Treasury), using free public feeds with no API keys. Tools include descriptions, argument examples, and actionable error messages.
-- **Explaining Moves:** The agent lines up price history with news and SEC filings around the date, then judges which items could plausibly move the stock.
-- **Charts:** Drawn only on request. `get_chart` builds an SVG in `chart.py`; the UI shows it and the model only sees a short text summary.
-- **Analysis:** Price returns, volatility and implied moves are computed in Python, not by the model.
-- **Memory:** Full message history is kept in memory per `session_id`, so follow-ups work and sessions stay separate; it resets on restart or New Session.
-- **UI:** A modern, minimal take on a Bloomberg terminal (black, amber, monospace) with a scrolling price tape and clickable sample queries.
+Phase 1 is complete: the agent runs on the OpenAI Agents SDK with five tools, SQLite-backed
+sessions and interactive Plotly output. The pair screening, backtest and multi-agent research
+fan-out described above are Phases 2–4 and are **not built yet**. This README describes what the
+code does today; the final version records the full pipeline, sample queries and evaluation.
 
-### Market Universe
+## Design Choices
 
-**Equities**
+- **Agent framework:** OpenAI Agents SDK (`openai-agents[litellm]`), routed to Gemini on Vertex AI.
+  Tool schemas come from each function's signature and docstring, replacing Project 1's hand-written
+  schema list.
+- **Models:** reasoning and prose are fixed on Gemini 3.5 Flash. The researcher model is selectable
+  in the UI from four Gemini models, because that is where the cost/quality trade-off lives.
+- **Sessions:** `SQLiteSession` over `conversations.db`, one row per message, so follow-ups work and
+  sessions stay separate. On Cloud Run the filesystem is in memory, so history lasts as long as the
+  instance.
+- **Separation of concerns:** `app.py` is FastAPI only; every agent decision lives behind
+  `orchestrator.answer()`, which is the single seam the multi-agent pipeline grows into.
+- **Analysis in Python:** returns, volatility, drawdown, VaR, Sharpe, Sortino, beta and alpha are
+  computed in Python, not by the model.
+- **Charts:** one library, Plotly, for every visualization — lines and tables today, spread and
+  correlation views next. Figures are built in Python as specs and rendered by the page, so they are
+  interactive (zoom, pan, hover readout, drag to compare dates) and **never enter the model's
+  context**, which would otherwise replay thousands of tokens on every later turn. Plotly is served
+  from the installed package, not a CDN, so a blocked CDN cannot leave a grader with no charts.
+- **UI:** a modern take on a Bloomberg terminal (black, amber, monospace) with a live price tape and
+  clickable sample queries.
 
-- US stocks and ETFs (~15 min delayed; the last close when the market is closed)
-- US indices: SPX, NDX, RUT and the VIX level (~15 min delayed)
-- US listed options on stocks, ETFs and indices (~15 min delayed)
+## Data Sources
 
-**News and Filings**
+| Source | What it provides | Freshness |
+|---|---|---|
+| Cboe delayed quotes | Daily OHLCV for US stocks, ETFs and indices, 2004–present | ~15 min delayed; the last close when the market is shut |
+| SEC EDGAR | 8-K events with item codes, 10-K and 10-Q filings, to explain a divergence | Same day |
+| Google News RSS | Headlines for a symbol or keywords; explains prolonged divergences | Same day, headlines only |
+| Nasdaq Trader | Symbol directory: listings, names and ETF flags | Daily |
+| Wikipedia | S&P 500 constituents with GICS sector, sub-industry and CIK (offline build only) | Monthly, in practice |
 
-- News headlines for any ticker or keywords, latest or past dates (Google News; headlines only, no article text)
-- SEC filings for US-listed companies: 8-K events, 10-K and 10-Q (not ETFs or indices)
+All are free public feeds with no API keys.
 
-**Charts**
+**Not covered:** options, crypto, futures, Form 4 executive transactions, fundamentals, rates and
+FX. Prices are split-adjusted but exclude dividends, so every return is a price return.
 
-- Daily closing-price line charts for any supported symbol, on request
+## Tools
 
-**Not covered:** crypto, VIX and CME futures, executive share transactions (Form 4), fundamentals, rates and FX.
-
-## Cloud Deployment
-
-Deployed on Google Cloud Run, which rebuilds automatically on every push to `main`. Both links reach the same service; sign in with a Columbia Google account.
-
-- Main: https://tool-calling-agent-git-llmb6vmaoa-nn.a.run.app
-- Backup: https://tool-calling-agent-git-401765433529.northamerica-northeast1.run.app
+| Tool | Purpose | Source |
+|---|---|---|
+| `screen_pairs` | Fit **every** combination in a sector, ETF family or symbol list, rank them, and backtest the best on a holdout | Cboe + reference DB |
+| `analyze_pair` | One pair in full: statistics, holdout backtest, divergence episodes and a z-score chart | Cboe |
+| `research_divergence` | News and SEC filings for both legs over exactly one divergence window | Google News, SEC EDGAR |
+| `get_reference_schema` | Columns and real enum values of the reference table, for writing SQL | Reference DB |
+| `query_reference` | One read-only SELECT against the reference table; returns the SQL it ran, for citation | Reference DB |
+| `get_price_history` | Period return, high, low and realized volatility over a date range | Cboe |
+| `get_chart` | Interactive daily closing-price line chart, on request | Cboe |
+| `get_news` | Headlines for a symbol or keywords: last 7 days, or a date range | Google News |
+| `get_filings` | SEC 8-K events and 10-K/10-Q reports: latest, or a date range | SEC EDGAR |
 
 ## Run Locally
 
@@ -56,67 +84,44 @@ gcloud auth application-default login
 uv run app.py
 ```
 
-Then open http://localhost:8000. If it can't resolve the project, set `GOOGLE_CLOUD_PROJECT=<your project id>`.
+Then open http://localhost:8000. If it cannot resolve the project, set
+`GOOGLE_CLOUD_PROJECT=<your project id>`.
 
-## Sample Queries
+No API keys and no other environment variables. Every feed is called with one generic
+User-Agent that carries no personal contact details.
 
-1. "What's NVDA trading at, and what is the options market implying for its next-expiry move?" (price and options)
-2. "TSLA jumped on October 2. What happened?" (price history, news and SEC filings)
-3. "Chart AAPL's price over the last 6 months." (chart)
+## Cloud Deployment
 
-## Tools
+Deployed on Google Cloud Run. Sign in with a Columbia Google account.
 
-| Tool | Purpose | Source |
-|---|---|---|
-| `get_price` | Latest price, change, bid/ask, volume, 30-day IV | Cboe |
-| `get_price_history` | Return, high/low, realized vol over a date range | Cboe |
-| `get_chart` | Daily closing-price line chart, on request | Cboe |
-| `get_risk_metrics` | Volatility, max drawdown, VaR, Sharpe, Sortino, beta and alpha vs a benchmark | Cboe, US Treasury |
-| `get_option_chain` | Strikes near the money, ATM IV, implied move, put/call ratios | Cboe |
-| `get_news` | Headlines for a ticker or keywords: last 7 days, or a date range | Google News |
-| `get_filings` | SEC 8-K events and 10-K/10-Q reports: latest, or a date range | SEC EDGAR |
-| `search_symbol` | Ticker for a company or fund name ("Nvidia" gives NVDA) | Nasdaq Trader |
-
-## Future Improvements
-
-**Market Data**
-
-- Crypto: spot, futures, perpetuals and funding rates, options
-- Futures: VIX futures curve and CME index futures (ES, NQ), which need a keyed data vendor
-- Rates (SOFR, Treasury yield curve) and FX with implied forwards
-- Form 4 filings (share transactions by executives and directors)
-- Full article text for news
-
-**Analysis**
-
-- Further analysis tools: risk metrics for several symbols at once, correlations and comparisons
-- Richer options outputs: skew, term structure, open-interest strikes
-- Backtest simulation: run a trading strategy over historical prices and report returns and drawdown
-- Pairs and statistical arbitrage research: give the agent pairs or ideas to try, and it finds likely candidates with the tools, backtests them and summarizes risk, performance and results; covers statistical pairs (stock vs stock, ETF vs ETF) and cross-product pairs (e.g. futures vs ETFs, which need a futures data feed)
-- Order book display (depth, spread, imbalance) and slippage estimates; needs a depth data feed, since the free Cboe quotes only show the best bid and ask
-
-**Charts**
-
-- More chart types (comparisons, curves)
-
-**User Experience**
-
-- Streaming progress: show each tool call as it happens, instead of one wait on "Fetching data..."
-- Remember settings (model, tool limit, tape and twinkle speed) between visits
-- Input history: the up and down arrow keys recall the previous or next typed message
-- Text auto-complete for tickers and company names
-- Multi-session handling: keep several chats open, switch between them and resume old ones; needs stored sessions, since chats now live in server memory and reset on restart
-
-**Evaluation**
-
-- Eval script (`evals/`): replays a fixed set of questions against a running server and checks tool choice, declines, signed numbers and name lookups for each model
-- Separate evaluation agent: replays test questions, checks answers against the tool results (numbers, tool choice, declines), and scores each model
+- https://tool-calling-agent-git-llmb6vmaoa-nn.a.run.app
+- Backup: https://tool-calling-agent-git-401765433529.northamerica-northeast1.run.app
 
 ## Files
 
-- `app.py`: harness loop, sessions, `/chat`, `/clear`
-- `tools.py`: tool schemas, tool logic, `run_tool()`
-- `chart.py`: draws line charts as SVG
-- `risk.py`: volatility, drawdown, Sharpe and beta calculations
-- `data.py`: Cboe, Google News, SEC EDGAR, Nasdaq Trader and Treasury fetchers
-- `index.html`: UI
+| File | Role |
+|---|---|
+| `app.py` | FastAPI only: the page, `/chat`, `/clear`, the price tape, the Plotly bundle |
+| `orchestrator.py` | `answer()`: one question in, one answer out. The seam the agent pipeline grows into |
+| `roster.py` | The agents, their instructions and the Vertex model factory |
+| `config.py` | Which model each role uses, and the caps on one run |
+| `tools.py` | The tools the model can call: plain Python bodies, with `@function_tool` wrappers |
+| `pairs.py` | The pair maths: hedge ratio, spread, z-scores, half-life, rolling beta, divergence episodes |
+| `backtest.py` | Holdout backtest: fit in-sample, trade both windows on frozen parameters, deflate the Sharpe |
+| `screen.py` | Fit every combination in a universe, rank them, backtest the best |
+| `refdata.py` | Read-only DuckDB over the reference table: schema, enum values, SQL, universe resolution |
+| `hooks.py` | Records every tool call, tagged with the agent that made it |
+| `run_context.py` | Per-run state the model never sees, such as figures bound for the page |
+| `chart.py` | Themed Plotly figure specs (lines, tables and the z-score panel) |
+| `data.py` | Fetchers for Cboe, SEC EDGAR, Google News and Nasdaq Trader |
+| `index.html` | The UI |
+| `data/` | The committed reference database and its schema card |
+| `build/` | **Offline, run once.** `build_refdata.py` writes `data/`; `wikitables.py` parses the S&P 500 constituents table. Never imported at request time |
+
+## Future Improvements
+
+- **Futures legs:** basis trades (VIX futures vs VXX, ES vs SPY) need a keyed data vendor
+- **Basket vs basket:** cointegrated baskets on both sides, not just a single pair
+- **Intraday execution:** entry and exit timing within the session, which needs tick history
+- **Richer evaluation:** a larger eval suite and ablations over the research architecture
+- **Persistent sessions:** several chats open at once, surviving a restart
