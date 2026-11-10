@@ -31,6 +31,23 @@ MODEL_RETRIES = 2  # Vertex rate-limits bursts, and a fan-out makes many calls a
 # One turn is a model call plus every tool call it asks for, so this caps rounds, not calls.
 MAX_TURNS = 12
 
+# --- Phase 3: the research pipeline ---
+#
+# Every cap lives here rather than in a prompt. A model asked to respect its own budget will
+# sometimes not, and the failure is invisible; a number checked in Python cannot be negotiated.
+
+CLARIFIER_TIMEOUT_S = 20  # a gate that is slow to say 'go ahead' is worse than no gate
+LEAD_TURNS = 6  # enough for research -> research -> write_report, with slack
+MAX_FANOUT_ROUNDS = 2  # a second round exists to fill a stated gap, not to keep fishing
+MAX_BRIEFS_PER_ROUND = 4
+MAX_CONCURRENT_RESEARCHERS = 4  # Vertex 429s under heavier fan-out, and 4 briefs is already wide
+MAX_RESEARCHER_TURNS = 12  # each tool call is a turn, so this must exceed the tool budget below
+MAX_RESEARCHER_TOOL_CALLS = 6  # stated in the prompt; the turn cap above is the hard backstop
+RESEARCHER_TIMEOUT_S = 110  # a sector screen measured ~15s; this is slack for a slow fetch, not a target
+WRITER_TIMEOUT_S = 60
+# Inside the 300s Cloud Run default even if that setting is ever lost, and well inside our 900s.
+TOTAL_BUDGET_S = 240
+
 # --- Screening ---
 
 # How much history a screen looks at. Cboe carries daily bars from 2004, so 3 years is always
@@ -44,7 +61,7 @@ MIN_LOOKBACK_DAYS = 400
 MAX_LOOKBACK_DAYS = 10 * 365
 MIN_OVERLAP_SESSIONS = 250  # fewer shared sessions than this and the statistics are not worth citing
 
-SCREEN_THREADS = 6  # Cboe fetches are per symbol, not per pair, and it throttles bursts
+SCREEN_THREADS = 4  # per symbol, not per pair; data._SLOTS caps the real concurrency anyway
 TOP_K = 8  # pairs carried from the screen into a full backtest
 MAX_TOP_K = 20
 MAX_UNIVERSE = 40  # 40 names is already 780 pairs; screening is quadratic in this

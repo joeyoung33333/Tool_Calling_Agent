@@ -21,6 +21,7 @@ never cached.
 
 import functools
 import re
+import threading
 import xml.etree.ElementTree as ET
 from datetime import date, datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
@@ -72,10 +73,18 @@ class DataError(Exception):
     """A failure whose message is written for the model: what went wrong and what to try."""
 
 
+# Cboe throttles bursts, and the research fan-out multiplies them: two researchers screening the
+# same sector is 2 x 21 symbols x SCREEN_THREADS requests arriving together, which is what turned a
+# working screen into a wall of HTTP 429s. The cap is on this process as a whole rather than per
+# caller, because the upstream limit is per IP and does not care how many agents we are running.
+_SLOTS = threading.BoundedSemaphore(4)
+
+
 def _fetch(url: str, **params) -> requests.Response:
     host = url.split("/")[2]
     try:
-        r = requests.get(url, params=params, headers={"User-Agent": _UA}, timeout=15)
+        with _SLOTS:
+            r = requests.get(url, params=params, headers={"User-Agent": _UA}, timeout=15)
     except requests.RequestException as e:
         raise DataError(f"Could not reach {host} ({type(e).__name__}). Try again shortly.")
     if r.status_code in (403, 404):
@@ -144,14 +153,37 @@ def price(symbol: str) -> dict:
     }
 
 
-@functools.lru_cache(maxsize=64)
+# One lock per symbol, so two threads wanting the same series do not both fetch it. lru_cache is
+# thread-safe but does not deduplicate: concurrent callers all miss, all fetch, and all populate.
+# That is exactly the pattern parallel researchers produce.
+_BAR_LOCKS: dict[str, threading.Lock] = {}
+_BAR_LOCKS_GUARD = threading.Lock()
+
+
+def published_bars(symbol: str) -> tuple[dict, ...]:
+    """`_published_bars` with duplicate concurrent fetches collapsed into one.
+
+    The first caller for a symbol fetches and fills the cache; the rest wait on its lock and then
+    read the cached value, so a screen run by four researchers costs one fetch per symbol, not four.
+    """
+    with _BAR_LOCKS_GUARD:
+        lock = _BAR_LOCKS.setdefault(symbol, threading.Lock())
+    with lock:
+        return _published_bars(symbol)
+
+
+@functools.lru_cache(maxsize=192)
 def _published_bars(symbol: str) -> tuple[dict, ...]:
     """Every daily bar Cboe publishes for `symbol`, oldest first.
 
     Cached because a pair screen fetches each leg once and then every pair, episode and backtest
-    re-reads the same series: 25 symbols answer 300 pairs. Bounded at 64 because the widest screen
-    is a 40-name universe and each series is a few hundred KB. Published bars never change, so this
-    is safe for the life of the process; the live top-up in price_history() stays uncached.
+    re-reads the same series: 25 symbols answer 300 pairs. Bounded generously because several
+    researchers screen different universes in one run and eviction would re-fetch what a sibling
+    just paid for. Published bars never change, so this is safe for the life of the process; the
+    live top-up in price_history() stays uncached.
+
+    Call `published_bars()` instead of this directly - it adds the per-symbol lock that stops
+    concurrent callers all missing the cache at once.
     """
     s = clean(symbol)
     # Cboe history rows: date, open, high, low, close, volume. Index rows hold strings ("16.150000") and omit the latest session.
@@ -173,7 +205,7 @@ def _published_bars(symbol: str) -> tuple[dict, ...]:
 def price_history(symbol: str, start: date, end: date | None = None) -> list[dict]:
     """Daily bars (date, open, high, low, close, volume) from `start` to `end` (default today), oldest first."""
     s = clean(symbol)
-    bars = list(_published_bars(s))
+    bars = list(published_bars(s))
     last = (end or date.today()).isoformat()
     if bars and last <= bars[-1]["date"]:
         return [b for b in bars if start.isoformat() <= b["date"] <= last]  # wholly historical

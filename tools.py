@@ -108,8 +108,12 @@ def _run(fn, ctx=None, **kwargs) -> str:
         out = fn(**kwargs)
         if isinstance(out, tuple):  # no tool's model payload is a tuple, so this is unambiguous
             out, figure = out
-            label = out.get("symbol") or out.get("pair") or out.get("chart_label")
-            ctx.context.charts.append({"symbol": label, "figure": figure})
+            # Drop the figure rather than the answer if no context was threaded in. Forgetting the
+            # wrapper's ctx parameter is a one-character mistake that otherwise turns every call of
+            # a drawing tool into "this tool failed unexpectedly (AttributeError)".
+            if ctx is not None and getattr(ctx, "context", None) is not None:
+                label = out.get("symbol") or out.get("pair") or out.get("chart_label")
+                ctx.context.charts.append({"symbol": label, "figure": figure})
         return json.dumps(out, default=str)
     except DataError as e:
         return json.dumps({"error": str(e)})
@@ -281,8 +285,11 @@ def _screen_pairs(
     symbols: list[str] | None = None,
     top_k: int | None = None,
     lookback_days: int | None = None,
-) -> dict:
-    """Resolve a universe, fit every combination in it, rank them, and backtest the best."""
+) -> tuple[dict, dict]:
+    """Resolve a universe, fit every combination in it, rank them, and backtest the best.
+
+    Returns (summary, figure): the ranked table is drawn for the page, never returned to the model.
+    """
     try:
         universe = refdata.resolve_universe(sector=sector, etf_family=etf_family, symbols=symbols)
     except refdata.RefDataError as e:
@@ -511,6 +518,7 @@ def analyze_pair(
 
 @function_tool
 def screen_pairs(
+    ctx: RunContextWrapper[RunContext],
     sector: str | None = None,
     etf_family: str | None = None,
     symbols: list[str] | None = None,
@@ -531,7 +539,7 @@ def screen_pairs(
         top_k: How many of the best pairs to backtest. Default 8, maximum 20.
         lookback_days: History to use. Default 1095 (3 years).
     """
-    return _run(_screen_pairs, sector=sector, etf_family=etf_family, symbols=symbols,
+    return _run(_screen_pairs, ctx, sector=sector, etf_family=etf_family, symbols=symbols,
                 top_k=top_k, lookback_days=lookback_days)
 
 
