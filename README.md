@@ -150,79 +150,87 @@ closes.
 
 ## Sample Queries
 
-Three to test with. Each names its source, what to expect, and the same question put to the **same
-model with no tools and no system prompt**. Recorded on 2026-11-18 with the dropdown on Gemini 3.5
-Flash-Lite. A research-path answer is written by the Writer on Gemini 3.8 Flash, so query 1 is
-compared on 3.8 Flash; queries 2 and 3 are answered by the Analyst, so theirs use 3.5 Flash-Lite.
-Quotes are verbatim. Numbers move with the market, so expect the shape of the answer to match rather
-than the digits.
+The UI's three research-path examples, each fanned out to parallel researchers, beside the same
+question to the Writer's model (Gemini 3.8 Flash) with **no tools and no system prompt**. Recorded
+2026-11-18, quoted verbatim; numbers move with the market, so expect the same shape, not digits.
 
 ---
 
 ### 1. "Which pairs in the energy sector are viable pair trades?"
 
-**Source** — universe from `data/refdata.duckdb` (`instruments`, GICS sector Energy, 21 names);
-prices from Cboe, `cdn.cboe.com/api/global/delayed_quotes/charts/historical/{symbol}.json` (3 years
-of daily bars), topped up from `…/quotes/{symbol}.json` for the latest session.
+**Path** — Clarifier → Lead → 4 Researchers in parallel → Writer → citation audit
 
-**Expect** — all 210 pairs fitted and ranked, the best eight backtested on the holdout, and **no
-pair with a positive deflated Sharpe**. About two minutes, with researchers in parallel and
-sometimes a second round.
+**Tool calls** — `screen_pairs` once per brief, on the whole sector or one sub-industry, after
+`get_reference_schema` and `query_reference` resolve the sub-industries; `analyze_pair` and
+`research_divergence` for a named pair. The recorded run made 20 calls.
 
-| Converge (124s; 3 researchers in one round; 6 data-tool calls; 3 charts) | Gemini 3.8 Flash, no tools (6,095 characters) |
+**Source** — universe from `data/refdata.duckdb`, table `instruments` (GICS sector Energy, 21
+names); end-of-day market data from Cboe,
+`cdn.cboe.com/api/global/delayed_quotes/charts/historical/{symbol}.json` (3 years of daily bars).
+
+**Expect** — **no pair with a positive deflated Sharpe**, each reported with its holdout Sharpe and
+deflated Sharpe. About 1.5–2 minutes.
+
+| Converge (79s) | Gemini 3.8 Flash, no tools |
 |---|---|
-| "No pairs in the energy sector screen are viable pair trades, as none achieved a positive deflated Sharpe ratio." Then per pair, e.g. COP/OXY: correlation **0.81**, half-life **13.1** days, holdout Sharpe **−1.18**, deflated **−3.33** after a **2.15** deduction for the 8 pairs backtested out of 210 screened. XOM/CVX's holdout Sharpe of **−1.88** came from a single-pair test, so it is reported as "uncorrected for multiple testing". Another researcher screened six refiner and oilfield-service names on their own: MPC/VLO deflated **−2.19**, HAL/SLB **−1.99**. | A confident essay from memory: "Here are the most viable, historically liquid, and cointegrated pair trades in the energy sector", led by **XOM/CVX** ("The Classic Domestic Spread"), with trading rules such as ±2 standard deviations from a 60- or 90-day moving average. Nothing is measured. |
-
-**The difference.** The bare model recommends pairs from memory. The agent measures all 210 and
-reports that none has a positive deflated Sharpe, the honest "no" that the bare model cannot give.
+| "None of the screened pairs in the energy sector are viable pair trades, as no tested pair achieved a positive deflated Sharpe ratio." E.g. COP/OXY: correlation **0.81**, deflated Sharpe **−3.33**. | "Here are the most viable pairs across the energy sector", led by **ExxonMobil vs. Chevron**, all from memory. |
 
 ---
 
-### 2. "Is LMT a good pair trade with RTX?"
+### 2. "Are these viable pair trades: AMZN vs GOOGL, MS vs JPM, WMT vs TGT, KO vs PEP, and SPY vs QQQ?"
 
-**Source** — Cboe daily bars for both legs from the same endpoints, 3 years; company names from
-`data/refdata.duckdb`.
+**Path** — Clarifier → Lead → 4 Researchers in parallel (one or two pairs each) → Writer → citation
+audit
 
-**Expect** — the fast path: one analyst, one `analyze_pair` call and a z-score chart in about
-15–40s. A negative verdict with correlation, half-life, beta stability and a holdout backtest, not
-deflated because only one pair was tested.
+**Tool calls** — `analyze_pair` once per pair: 5 calls.
 
-| Converge (39s; 1 tool call; 1 chart) | Gemini 3.5 Flash-Lite, no tools (4,616 characters) |
+**Source** — end-of-day market data from Cboe for the ten tickers,
+`cdn.cboe.com/api/global/delayed_quotes/charts/historical/{symbol}.json` (3 years of daily bars).
+
+**Expect** — **nothing confirmed viable**: AMZN/GOOGL positive but undeflated, MS/JPM and SPY/QQQ
+losing on the holdout, WMT/TGT and KO/PEP rejected for a negative hedge ratio. About 1–2 minutes.
+
+| Converge (59s) | Gemini 3.8 Flash, no tools |
 |---|---|
-| "Lockheed Martin (LMT) and RTX Corporation (RTX) do not currently make a strong pair trade." Correlation **0.354**; half-life **60.1** days; beta stability **1.883**; holdout Sharpe **−0.34**, return **−5.88%**, win rate **33.3%** over 3 trades; "Sharpe is not deflated because only this single pair was tested." | "fundamentally, **yes, they are a classic pair trade candidate** because they share the same primary industry driver (defense spending), similar macroeconomic tailwinds, and high historical correlation." |
-
-**The difference.** This is the sharpest case: the bare model's reasoning sounds right and its
-conclusion is **the opposite of what the data says**. It cites high correlation; the measured
-correlation is 0.354, the half-life is 60 days, and the holdout loses money.
+| "None of the evaluated pairs are viable because none have a positive deflated Sharpe ratio reported." AMZN/GOOGL holdout Sharpe **2.2** on **2** trades, uncorrected; MS/JPM **−1.85**; SPY/QQQ **−1.55**; WMT/TGT and KO/PEP hedge ratios **−0.5344** and **−0.1639**, so not tradeable. | "Yes, all five of these are **classic, highly liquid, and viable pair trades**", with KO vs PEP the "Gold Standard" and WMT vs TGT "Very High". |
 
 ---
 
-### 3. "How many ETFs are in the reference database, and which ETF families are covered?"
+### 3. "Which energy pairs diverged the most, and what caused those divergences?"
 
-**Source** — `data/refdata.duckdb`, table `instruments`, via `get_reference_schema` then
-`query_reference`; the SQL it ran is shown in the timeline.
+**Path** — Clarifier → Lead → 4 Researchers → Lead → 4 more Researchers for the gap → Writer →
+citation audit
 
-**Expect** — exactly **122** ETFs across **15** families: thematic 12, broad_us 12, bond 12,
-international 12, vanguard_sector 11, sector_spdr 11, style 9, sp500_leveraged 8, commodity 8,
-factor 7, nasdaq_leveraged 5, russell_leveraged 4, volatility 4, dow_leveraged 4, equal_weight 3.
-About 15s.
+**Tool calls** — `screen_pairs` to find the pairs, `analyze_pair` for each pair's divergence
+episodes, `research_divergence` over each episode's window. The recorded run made 21 calls (3, 9
+and 9).
 
-| Converge (13s; 3 tool calls) | Gemini 3.5 Flash-Lite, no tools (322 characters) |
+**Source** — end-of-day market data from Cboe and the universe from `data/refdata.duckdb`, as in
+query 1, plus Google News RSS (`news.google.com/rss/search`) and SEC EDGAR
+(`data.sec.gov/submissions/CIK{cik}.json`) over each divergence window.
+
+**Expect** — the widest divergence named from the spread z-scores, and a plain statement when the
+news and filings do not settle the cause. About two minutes.
+
+| Converge (121s) | Gemini 3.8 Flash, no tools |
 |---|---|
-| "There are **122** ETFs included in the reference database across **15** distinct curated ETF families", then each family with its count, matching the list above exactly. | "I do not have access to a specific reference database unless you provide one or specify which financial platform, dataset, or context you are referring to.<br><br>If you can share the name of the database, the publisher, or paste the relevant data, I would be happy to help you count the ETFs and list the covered ETF families!" |
-
-**The difference.** This is data no model can know: a database built by this project's own offline
-step. The bare model rightly declines; the agent writes the SQL and returns the exact counts.
+| "…among the pairs with divergence data, the refining pair VLO/MPC diverged the most", with a peak z-score of **9.54**; "the evidence does not support an answer regarding fundamental catalysts". | Reads "energy pairs" as commodities and recounts history: TTF vs Henry Hub gas in 2022, Brent vs WTI, crude vs refined products. |
 
 ---
 
 ### Also Worth Trying
 
-| Type this | What it shows |
-|---|---|
-| `Chart this symbol.`, then `NVDA` | **Vague input:** the Clarifier asks which symbol (7s, no tools), then the reply is charted on the fast path (13s). It never asks twice in a conversation. |
-| `Find a good cryptocurrency pair trade?` | **Out of scope:** declined in the first sentence (~5s), without using the conversation's one clarification. |
-| `Which energy pairs diverged the most, and what caused those divergences?` | The heaviest run, about two minutes: screen the sector and read news and SEC filings over the widest divergences. Expect it to say when that evidence does not settle the cause. |
+The fast-path and clarification examples from the UI, each recorded on 2026-11-18.
+
+| Question | Tools and data | Expect |
+|---|---|---|
+| `Is AMZN a good pair trade with NVDA?` | `analyze_pair`; Cboe bars | Fast path, ~20s: correlation, half-life, a holdout backtest and a z-score chart. A positive holdout Sharpe (**2.17** over 5 trades): promising at most, never viable, because one pair is not deflated. |
+| `How many ETFs are in the reference database, and which ETF families are covered?` | `get_reference_schema`, `query_reference`; `data/refdata.duckdb` (`instruments`) | ~15s: **122** ETFs in **15** families, each family's count from the agent's own GROUP BY. The SQL shows in the timeline. |
+| `Chart AAPL's price over the last 6 months.` | `get_chart`; Cboe bars | ~20s: an interactive closing-price chart and the period return. |
+| `How volatile has NVDA been over the past year?` | `get_price_history`; Cboe bars | ~25s: realized volatility, period return, high and low, and a month-end price table. |
+| `What news and SEC filings came out for TSLA this month?` | `get_news`, `get_filings`; Google News, SEC EDGAR | ~20–30s: the month's headlines, and its 8-K, 10-K and 10-Q filings or a note that there were none. |
+| `Find a good cryptocurrency pair trade?` | None; Clarifier only | ~5s: declined as out of scope in the first sentence, with what the desk can do instead. |
+| `Chart this symbol.`, then `NVDA` | None, then `get_chart`; Cboe bars | ~5s: the Clarifier asks which symbol; the reply is charted (~10s). It asks at most once per conversation. |
 
 ## Data Sources
 
