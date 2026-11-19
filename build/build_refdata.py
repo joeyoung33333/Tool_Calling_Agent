@@ -1,24 +1,6 @@
-"""Offline build of the reference-data database. Run once; its output is committed.
+"""Offline build of the reference database (S&P 500 + 122 curated ETFs); its output is committed.
 
-    uv run build/build_refdata.py [--limit N]
-
-Writes `data/refdata.duckdb` (one `instruments` table) and `data/refdata_mappings.json` (the schema
-card the Text2SQL agent reads). Nothing here runs at request time.
-
-Why offline: symbols, names, sectors, ETF families and share classes change on the scale of months,
-so resolving them live would spend a research agent's budget re-deriving constants. Everything that
-*can* change day to day - prices, correlations, betas, half-lives, backtests - is computed live and
-is never stored here. The output is committed because continuous deploy ships only committed files.
-
-Universe (~640 names, approved 2026-11-09): the S&P 500 plus a curated list of major ETFs. That
-covers every Dow 30 name and nearly every Nasdaq-100 name, and the ETF list carries the index funds
-and their leveraged families explicitly, which is what "an ETF family" queries screen over.
-
-Sector comes from GICS, published in the Wikipedia constituents table alongside the name and CIK.
-An earlier version read the SEC's SIC code per company instead; SEC rate-limits per IP and hard, so
-that crawl resolved 12 of 503 names and had to be retried for hours. GICS covers all of them in the
-one page fetch, in the vocabulary traders use, so the build no longer touches a rate-limited feed
-and finishes in seconds.
+Run: uv run build/build_refdata.py [--limit N]
 """
 
 import argparse
@@ -29,12 +11,10 @@ from pathlib import Path
 import duckdb
 import requests
 
-# This script lives in build/ but reads the project's fetchers from the repo root, which Python does
-# not put on sys.path when a script is run by path. Added before the local imports so that
-# `uv run build/build_refdata.py` works from a clean checkout.
+# Run by path, so put the repo root on sys.path before the local imports.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-import data  # noqa: E402 - must follow the sys.path line above
+from sources import data  # noqa: E402 - must follow the sys.path line above
 import wikitables  # noqa: E402 - sibling module inside build/
 
 OUT_DIR = Path(__file__).resolve().parent.parent / "data"
@@ -43,9 +23,7 @@ MAPPINGS_PATH = OUT_DIR / "refdata_mappings.json"
 
 SP500_URL = "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies"
 
-# Curated ETF universe, grouped into the families a pair screen actually wants to compare within.
-# (symbol, leverage, underlying): leverage is the stated daily multiple and `underlying` the fund it
-# tracks, which is what makes "leveraged vs underlying" screenable. 1.0/None means a plain fund.
+# (symbol, leverage, underlying): the stated daily multiple and the tracked fund; 1/None is plain.
 ETF_FAMILIES: dict[str, list[tuple[str, float, str | None]]] = {
     "broad_us": [("SPY", 1, None), ("VOO", 1, None), ("IVV", 1, None), ("SPLG", 1, None),
                  ("VTI", 1, None), ("ITOT", 1, None), ("QQQ", 1, None), ("QQQM", 1, None),
@@ -81,8 +59,7 @@ ETF_FAMILIES: dict[str, list[tuple[str, float, str | None]]] = {
                  ("JETS", 1, None), ("TAN", 1, None), ("ICLN", 1, None), ("ARKK", 1, None)],
 }
 
-# One row per instrument. `symbol` is the Cboe spelling and `sec_symbol` the SEC one; they differ for
-# multi-class names (BRK.B vs BRK-B) and every join needs both.
+# `symbol` is the Cboe spelling, `sec_symbol` the SEC one (BRK.B vs BRK-B).
 COLUMNS = [
     ("symbol", "VARCHAR", "Cboe ticker, the spelling every price tool takes. E.g. 'NVDA', 'BRK.B'."),
     ("sec_symbol", "VARCHAR", "SEC ticker spelling, which uses '-' for share classes. E.g. 'BRK-B'."),
@@ -100,12 +77,7 @@ COLUMNS = [
 
 
 def sp500_records() -> list[dict[str, str]]:
-    """One record per S&P 500 constituent, straight from the Wikipedia constituents table.
-
-    That table also carries GICS sector, GICS sub-industry, the company name and the CIK, so it is
-    the better source for all four: GICS is the classification equity traders actually use, and its
-    CIK column covers recent spin-offs that the SEC ticker file has not caught up with.
-    """
+    """One record per S&P 500 constituent (with GICS, name and CIK) from Wikipedia."""
     html = requests.get(SP500_URL, headers={"User-Agent": data._UA}, timeout=30).text
     return wikitables.records(html, "symbol", 450)
 
@@ -172,10 +144,7 @@ def write_db(rows: list[dict]) -> None:
 
 
 def write_mappings(rows: list[dict]) -> None:
-    """The schema card the Text2SQL agent reads: columns, descriptions, and the real enum values.
-
-    Enums come from the built rows rather than being typed out, so they cannot drift from the data.
-    """
+    """The schema card the Text2SQL agent reads, with enum values taken from the built rows."""
     def values(column: str) -> list[str]:
         return sorted({r[column] for r in rows if r[column] is not None})
 

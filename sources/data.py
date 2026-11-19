@@ -1,22 +1,6 @@
-"""Market and filing data fetchers (free, no API keys). Only dependency: requests.
+"""Market, news and filing fetchers (free, no API keys): Cboe, SEC EDGAR, Google News, Nasdaq.
 
-Sources: Cboe (stocks, ETFs, indices - daily bars and quotes), SEC EDGAR (filings) and the Nasdaq
-Trader symbol directory. US equities only.
-
-Every function raises DataError on failure, with a message written for the model to act on.
-
-Caching: reference data (published daily bars, the symbol directory, the CIK map, SEC submissions)
-is cached for the life of the process because it does not change. Live quotes and headlines are
-never cached.
-
-    price(symbol)                          latest quote: price, bid/ask, volume, 30-day IV
-    price_history(symbol, start, end)      daily bars, oldest first
-    news(query, start, end)                headlines, newest first; no dates means the last 7 days
-    filings(symbol, start, end)            SEC filings, newest first; no dates means the latest
-    company_name(symbol)                   the listed name of a stock or ETF
-    cik_for(symbol)                        SEC CIK for a ticker
-    eastern_now()                          now in US Eastern, the market's clock
-    clean(raw)                             '$nvda' -> 'NVDA'; rejects names and crypto
+Errors are DataError with a message for the model; live quotes and headlines are never cached.
 """
 
 import functools
@@ -40,9 +24,9 @@ _UA = "Mozilla/5.0 (compatible; converge-agent/1.0; Columbia IEOR-4570 class pro
 _TICKER = re.compile(r"[A-Z][A-Z0-9.]{0,9}")  # 'NVDA', 'BRK.B'
 # Cboe prefixes index symbols with an underscore.
 _INDICES = {"VIX", "SPX", "RUT"}
-# Symbols this feed lacks, with the nearest thing it has: rejected up front, since a bare 403 tells the model nothing.
+# Symbols this feed lacks, with the nearest thing it has: a bare 403 tells the model nothing.
 _NO_DATA = {"NDX": "NDX is not on this feed. Use QQQ, the ETF that tracks the Nasdaq-100."}
-# Crypto is unsupported. Some double as ETF tickers (BTC is a Grayscale fund), so block them rather than pass a fund's price.
+# Blocked, since some crypto names are also ETF tickers (BTC is a Grayscale fund).
 _CRYPTO = {"BTC", "ETH", "XBT", "LTC", "SOL", "XRP", "DOGE", "ADA", "BITCOIN", "ETHEREUM"}
 # Used by _symbol_directory(): directory rows that are not the common stock itself.
 _NOT_STOCK = re.compile(r"warrant|\brights\b|\bunits?\b|preferred|\bnotes?\b", re.I)
@@ -59,10 +43,7 @@ _SEC_FORMS = {"10-K": "Annual report", "10-Q": "Quarterly report"}
 
 
 def eastern_now() -> datetime:
-    """Now in US Eastern time, where the markets are (UTC if the machine has no time-zone data).
-
-    Shared because both the price tape and the agent's instructions need today's market date.
-    """
+    """Now in US Eastern, the market's clock (UTC if the machine has no time-zone data)."""
     try:
         return datetime.now(ZoneInfo("America/New_York"))
     except ZoneInfoNotFoundError:
@@ -73,10 +54,7 @@ class DataError(Exception):
     """A failure whose message is written for the model: what went wrong and what to try."""
 
 
-# Cboe throttles bursts, and the research fan-out multiplies them: two researchers screening the
-# same sector is 2 x 21 symbols x SCREEN_THREADS requests arriving together, which is what turned a
-# working screen into a wall of HTTP 429s. The cap is on this process as a whole rather than per
-# caller, because the upstream limit is per IP and does not care how many agents we are running.
+# Process-wide: Cboe throttles per IP, and the fan-out multiplies bursts.
 _SLOTS = threading.BoundedSemaphore(4)
 
 
@@ -88,7 +66,7 @@ def _fetch(url: str, **params) -> requests.Response:
     except requests.RequestException as e:
         raise DataError(f"Could not reach {host} ({type(e).__name__}). Try again shortly.")
     if r.status_code in (403, 404):
-        # Cboe answers 403, not 404, for a symbol it does not carry, so both mean "unavailable here".
+        # Cboe answers 403, not 404, for a symbol it does not carry.
         raise DataError(
             f"{host} has no data for this request: the symbol is not available on this feed. "
             "Use a US-listed stock, ETF or index ticker such as 'NVDA', 'SPY' or 'VIX'."
@@ -107,7 +85,7 @@ def _json(url: str, **params) -> dict:
 
 def clean(raw: str) -> str:
     """'$nvda' -> 'NVDA', 'brk-b' -> 'BRK.B'. Rejects company names and unsupported crypto."""
-    symbol = re.sub(r"[-/]USD$", "", (raw or "").strip().upper().lstrip("$^"))  # 'BTC-USD' -> 'BTC' so crypto is caught
+    symbol = re.sub(r"[-/]USD$", "", (raw or "").strip().upper().lstrip("$^"))  # 'BTC-USD' -> 'BTC', so crypto is caught
     symbol = symbol.replace("-", ".")  # share classes: 'BRK-B' -> 'BRK.B'
     if not _TICKER.fullmatch(symbol):
         raise DataError(f"'{raw}' is not a ticker. Pass a symbol like 'NVDA', 'SPY' or 'VIX'.")
@@ -126,64 +104,48 @@ def _cboe(symbol: str) -> str:
 
 
 def _current_price(d: dict) -> float:
-    """After the close, current_price can be a late print, so use the official close that change_pct is based on."""
+    """After the close, current_price can be a late print, so prefer the official close."""
     session_over = d["last_trade_time"][11:16] >= "15:59"
     return d["close"] if session_over else d["current_price"]
 
 
 def price(symbol: str) -> dict:
     s = clean(symbol)
-    # Cboe quote fields: current_price, close, price_change, price_change_percent, bid, ask, open, high, low, volume, iv30, last_trade_time (ET).
+    # Cboe quote fields: current_price, close, bid, ask, open, high, low, volume, last_trade_time (ET).
     d = _json(f"{_CBOE}/quotes/{_cboe(s)}.json")["data"]
     return {
         "symbol": s,
         "price": _current_price(d),
         "open": d["open"],
-        "change": d["price_change"],
-        "change_pct": d["price_change_percent"],
         "bid": d["bid"],
         "ask": d["ask"],
         "high": d["high"],
         "low": d["low"],
         "volume": d["volume"],
-        "iv30_pct": None if s in _INDICES else d["iv30"],  # for an index this would be the vol of the index itself
         "as_of": d["last_trade_time"],
         "source": "Cboe",
         "delay": "~15 min delayed",
     }
 
 
-# One lock per symbol, so two threads wanting the same series do not both fetch it. lru_cache is
-# thread-safe but does not deduplicate: concurrent callers all miss, all fetch, and all populate.
-# That is exactly the pattern parallel researchers produce.
+# One lock per symbol: lru_cache does not deduplicate concurrent misses.
 _BAR_LOCKS: dict[str, threading.Lock] = {}
 _BAR_LOCKS_GUARD = threading.Lock()
 
 
 def published_bars(symbol: str) -> tuple[dict, ...]:
-    """`_published_bars` with duplicate concurrent fetches collapsed into one.
-
-    The first caller for a symbol fetches and fills the cache; the rest wait on its lock and then
-    read the cached value, so a screen run by four researchers costs one fetch per symbol, not four.
-    """
+    """`_published_bars` with concurrent fetches of one symbol collapsed into one."""
     with _BAR_LOCKS_GUARD:
         lock = _BAR_LOCKS.setdefault(symbol, threading.Lock())
     with lock:
-        return _published_bars(symbol)
+        return _published_bars(symbol, eastern_now().date())
 
 
 @functools.lru_cache(maxsize=192)
-def _published_bars(symbol: str) -> tuple[dict, ...]:
+def _published_bars(symbol: str, day: date) -> tuple[dict, ...]:
     """Every daily bar Cboe publishes for `symbol`, oldest first.
 
-    Cached because a pair screen fetches each leg once and then every pair, episode and backtest
-    re-reads the same series: 25 symbols answer 300 pairs. Bounded generously because several
-    researchers screen different universes in one run and eviction would re-fetch what a sibling
-    just paid for. Published bars never change, so this is safe for the life of the process; the
-    live top-up in price_history() stays uncached.
-
-    Call `published_bars()` instead of this directly - it adds the per-symbol lock that stops
-    concurrent callers all missing the cache at once.
+    Cached per Eastern day (`day` is only the cache key). Call `published_bars()` for the lock.
     """
     s = clean(symbol)
     # Cboe history rows: date, open, high, low, close, volume. Index rows hold strings ("16.150000") and omit the latest session.
@@ -222,11 +184,10 @@ def price_history(symbol: str, start: date, end: date | None = None) -> list[dic
     return [b for b in bars if start.isoformat() <= b["date"] <= last]
 
 
-
 def news(query: str, start: date | None = None, end: date | None = None, limit: int = 20) -> list[dict]:
-    """Google News headlines for a ticker or keywords, newest first. No start/end means the last 7 days.
+    """Google News headlines for a ticker or keywords, newest first. No dates means the last 7 days.
 
-    Pass both dates or neither; tools._optional_range is what validates model-supplied dates.
+    Pass both dates or neither; pipeline.tools._optional_range validates model-supplied dates.
     """
     q = (query or "").strip()
     if not q:
@@ -266,11 +227,7 @@ def _sec_ciks() -> dict[str, int]:
 # Cached: filings() is called once per symbol per episode, and each record is ~1 MB.
 @functools.lru_cache(maxsize=32)
 def _submissions(cik: int) -> dict:
-    """One company's SEC submissions record.
-
-    {"name": "LOCKHEED MARTIN CORP", "filings": {"recent": {"form": [...], "filingDate": [...]}}} -
-    the filing arrays are parallel, newest first, and hold roughly the last 1000 filings.
-    """
+    """One company's SEC submissions record; the filing arrays are parallel, newest first."""
     return _json(f"{_SEC}/submissions/CIK{cik:010d}.json")
 
 
@@ -279,18 +236,16 @@ def cik_for(symbol: str) -> int:
     cik = _sec_ciks().get(clean(symbol).replace(".", "-"))  # SEC writes share classes as BRK-B
     if cik is None:
         raise DataError(
-            f"'{symbol}' is not an SEC filer, so it has no filings. Indices never file. Most ETFs do "
-            "not either, though trust-structured ones such as SPY and QQQ do."
+            f"'{symbol}' is not an SEC filer, so it has no filings. Indices never file, and most "
+            "ETFs do not either; commodity trusts such as GLD do."
         )
     return cik
-
-
 
 
 def filings(symbol: str, start: date | None = None, end: date | None = None, limit: int = 20) -> list[dict]:
     """SEC 8-K (events), 10-K and 10-Q for a US-listed company, newest first. No dates means the latest.
 
-    Pass both dates or neither; tools._optional_range is what validates model-supplied dates.
+    Pass both dates or neither; pipeline.tools._optional_range is what validates model-supplied dates.
     """
     s = clean(symbol)
     cik = cik_for(s)
@@ -319,14 +274,10 @@ def filings(symbol: str, start: date | None = None, end: date | None = None, lim
     return out
 
 
-
-
 @functools.cache
 def _symbol_directory() -> list[tuple[str, str, bool]]:
     """(symbol, name, is_etf) for every listed stock and ETF, without test issues, warrants, rights, units or preferreds."""
-    # nasdaqlisted.txt: Symbol|Security Name|Market Category|Test Issue|Financial Status|Round Lot Size|ETF|NextShares
-    # otherlisted.txt:  ACT Symbol|Security Name|Exchange|CQS Symbol|ETF|Round Lot Size|Test Issue|NASDAQ Symbol
-    # Both carry a header line and a trailing "File Creation Time" line; the symbol pattern skips those and preferreds ('JPM$J').
+    # Pipe-delimited; the symbol pattern skips each file's header, footer and preferreds ('JPM$J').
     rows = []
     for name, etf_column, test_column in (("nasdaqlisted", 6, 3), ("otherlisted", 4, 6)):
         for line in _fetch(f"{_SYMBOLS}/{name}.txt").text.splitlines()[1:]:

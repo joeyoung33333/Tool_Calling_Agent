@@ -1,16 +1,6 @@
-"""Read the data tables out of a Wikipedia article, using only the standard library.
+"""Read the data tables out of a Wikipedia article, standard library only. Build time only.
 
-S&P 500 membership has no free API, and Wikipedia's constituent table is the usual source. This runs
-in `build/build_refdata.py` only, never at request time, so a parse break shows up at build time rather
-than in front of a user, and `records()` raises instead of returning a short list.
-
-Checked 2026-11-09: only the S&P 500 article still publishes its constituents as a wikitable. The
-Nasdaq-100 and Dow Jones articles now carry annual-returns tables and no components table, so index
-membership stops at `in_sp500`. Little is lost - every Dow 30 name and almost every Nasdaq-100 name
-is already in the S&P 500, and the index ETFs are covered by the curated ETF families instead.
-
-Deliberately not BeautifulSoup: one more dependency to ship for one page shape, where ~60 lines of
-HTMLParser does the job and the failure mode is a visible row count, not silent wrong data.
+Only the S&P 500 article still publishes its constituents as a wikitable (checked 2026-11-09).
 """
 
 import re
@@ -72,9 +62,7 @@ def tables(html: str) -> list[list[list[str]]]:
 def records(html: str, key: str, min_rows: int) -> list[dict[str, str]]:
     """Rows of the largest wikitable having a `key` column, as dicts keyed by lowercased header.
 
-    Rows whose `key` cell is not a plausible ticker are dropped, which removes footnote and total
-    rows. Raises ValueError rather than returning a short list: a silently truncated index would
-    quietly shrink the screening universe, which is far worse than a failed build.
+    Non-ticker `key` rows are dropped. Raises ValueError rather than silently shrink the universe.
     """
     best: list[dict[str, str]] = []
     for rows in tables(html):

@@ -1,76 +1,85 @@
-"""Reference values: which model each role uses, and the caps on one run.
+"""Model choice per role and the caps on one run.
 
-These are starting values, not commitments: real latency is unknown until the agent is timed end to
-end on Cloud Run, so they get re-tuned against a measured p95 before submission.
-
-Data limits (history length, news window, chart points) live beside the tools that enforce them,
-in tools.py.
+Set so the worst case finishes inside 3.5 minutes. Data limits live in pipeline/tools.py.
 """
 
 # --- Models ---
 
-# Whichever agent reasons or writes prose runs on Flash: Phase 3's Lead must emit parallel tool calls, which Flash-Lite botches.
-REASONING_MODEL = "vertex_ai/gemini-3.5-flash"
+# Pinned for the Clarifier, Lead and Writer (they ignore the dropdown); few calls each.
+REASONING_MODEL = "vertex_ai/gemini-3.8-flash"
 
-# UI name -> LiteLLM id for the model the user picks. Researchers carry the cost/quality trade-off: several, each multi-turn.
+# Dropdown name -> LiteLLM id: the GA 3.x models Vertex serves this project (probed 2026-11-17).
 RESEARCHER_MODELS = {
     "Gemini 3.5 Flash-Lite": "vertex_ai/gemini-3.5-flash-lite",
-    "Gemini 2.5 Flash-Lite": "vertex_ai/gemini-2.5-flash-lite",
+    "Gemini 3.8 Flash": "vertex_ai/gemini-3.8-flash",
     "Gemini 3.5 Flash": "vertex_ai/gemini-3.5-flash",
-    "Gemini 2.5 Flash": "vertex_ai/gemini-2.5-flash",
+    "Gemini 3.1 Flash-Lite": "vertex_ai/gemini-3.1-flash-lite",
 }
+# Flash-Lite: measured 2-3x faster than Flash on the same questions.
 DEFAULT_RESEARCHER_MODEL = "Gemini 3.5 Flash-Lite"
+
+# Pinned so reasoning does not vary by model (unset, the Flash-Lites do none).
+REASONING_EFFORT = "medium"
+
+# Retried on when the pinned Clarifier or Writer fails (10/10 gate verdicts; reports in 10-12s).
+FALLBACK_MODEL = "vertex_ai/gemini-3.5-flash-lite"
 
 # --- Model calls ---
 
-MODEL_TIMEOUT_S = 90  # a stalled call would otherwise hang the page
+# The Writer measured 35s on one long report. Keep TIMEOUT x (1 + RETRIES) under TOTAL_BUDGET_S.
+MODEL_TIMEOUT_S = 60
 MODEL_RETRIES = 2  # Vertex rate-limits bursts, and a fan-out makes many calls at once
 
-# --- Turn budgets ---
+# Held back for the Writer (35-60s on 3.8 Flash), including WRITER_FALLBACK_S for its retry.
+WRITEUP_RESERVE_S = 75
 
-# One turn is a model call plus every tool call it asks for, so this caps rounds, not calls.
-MAX_TURNS = 12
+# Retrying into an exhausted quota spends the budget; after this many, stop and report.
+MAX_RATE_LIMITS = 3
 
-# --- Phase 3: the research pipeline ---
-#
-# Every cap lives here rather than in a prompt. A model asked to respect its own budget will
-# sometimes not, and the failure is invisible; a number checked in Python cannot be negotiated.
+# --- Run budgets: caps live here, not in prompts, so a model cannot negotiate them ---
 
-CLARIFIER_TIMEOUT_S = 20  # a gate that is slow to say 'go ahead' is worse than no gate
+MAX_TURNS = 12  # one turn is a model call plus the tool calls it asks for, so this caps rounds
+# A failed gate would send a vague question to research, so it is retried on FALLBACK_MODEL.
+CLARIFIER_TIMEOUT_S = 20
+CLARIFIER_FALLBACK_TIMEOUT_S = 15
 LEAD_TURNS = 6  # enough for research -> research -> write_report, with slack
 MAX_FANOUT_ROUNDS = 2  # a second round exists to fill a stated gap, not to keep fishing
 MAX_BRIEFS_PER_ROUND = 4
-MAX_CONCURRENT_RESEARCHERS = 4  # Vertex 429s under heavier fan-out, and 4 briefs is already wide
+MAX_CONCURRENT_RESEARCHERS = 4  # Vertex 429s under heavier fan-out
 MAX_RESEARCHER_TURNS = 12  # each tool call is a turn, so this must exceed the tool budget below
-MAX_RESEARCHER_TOOL_CALLS = 6  # stated in the prompt; the turn cap above is the hard backstop
-RESEARCHER_TIMEOUT_S = 110  # a sector screen measured ~15s; this is slack for a slow fetch, not a target
-WRITER_TIMEOUT_S = 60
-# Inside the 300s Cloud Run default even if that setting is ever lost, and well inside our 900s.
-TOTAL_BUDGET_S = 240
+MAX_RESEARCHER_TOOL_CALLS = 6  # quoted in the prompt; the turn cap above is the hard backstop
+RESEARCHER_TIMEOUT_S = 110  # a sector-screen researcher measures 15-25s; the rest is fetch slack
+RESEARCHER_SALVAGE_S = 30  # a timed-out researcher's write-up of what it already gathered
+MIN_RESEARCHER_S = 20  # shortest research time worth starting a round for
+ROUND_MARGIN_S = 5  # a round returns at least this long before the main run is cut off
+WRITER_TIMEOUT_S = 90  # still capped by what is left of TOTAL_BUDGET_S when the Writer starts
+WRITER_FALLBACK_S = 25  # kept back from the first Writer attempt for a retry on FALLBACK_MODEL
+# Every stage is timed against what is left of TOTAL_BUDGET_S, so a run ends by about 205s.
+TOTAL_BUDGET_S = 200
 
 # --- Screening ---
 
-# How much history a screen looks at. Cboe carries daily bars from 2004, so 3 years is always
-# available for an established name; a leveraged ETF starts at its own inception. Three years is
-# long enough for a half-life and a rolling beta to mean anything, and short enough that a
-# pre-pandemic regime is not driving the correlation.
+# Long enough for a half-life to mean anything, short enough to exclude the pre-pandemic regime.
 LOOKBACK_DAYS = 3 * 365
-# Floor and ceiling for a caller-supplied lookback. The floor has to leave a holdout worth reporting
-# after the in-sample split; the ceiling is roughly what the price feed actually serves.
-MIN_LOOKBACK_DAYS = 400
-MAX_LOOKBACK_DAYS = 10 * 365
-MIN_OVERLAP_SESSIONS = 250  # fewer shared sessions than this and the statistics are not worth citing
+MIN_LOOKBACK_DAYS = 400  # must leave a holdout worth reporting after the in-sample split
+MAX_LOOKBACK_DAYS = 10 * 365  # roughly what the price feed serves
+MIN_OVERLAP_SESSIONS = 250  # a pair needs this much shared history to be screened
+MIN_BACKTEST_SESSIONS = 120  # floor for analysing one pair directly
 
 SCREEN_THREADS = 4  # per symbol, not per pair; data._SLOTS caps the real concurrency anyway
 TOP_K = 8  # pairs carried from the screen into a full backtest
 MAX_TOP_K = 20
 MAX_UNIVERSE = 40  # 40 names is already 780 pairs; screening is quadratic in this
 
-# What makes a pair worth backtesting, before any backtest has run. Equal weights by default, and
-# every metric is turned into a rank first, so one pair with a freak half-life cannot dominate.
-# Raise a weight to care more about it; set one to 0 to ignore that metric.
-# True where a bigger raw value ranks better. Must name every metric in SCREEN_WEIGHTS: the screen
-# refuses to guess a direction, because guessing wrong silently inverts the ranking.
+# Every metric is ranked first, so one outlier cannot dominate. A weight of 0 ignores a metric.
+SCREEN_WEIGHTS = {
+    "correlation": 1.0,
+    "half_life_days": 1.0,
+    "crossings_per_year": 1.0,
+    "beta_stability": 1.0,
+}
+
+# True where a bigger raw value ranks better. Must name every metric in SCREEN_WEIGHTS.
 SCREEN_HIGHER_IS_BETTER = {
     "correlation": True,
     "half_life_days": False,
@@ -78,26 +87,18 @@ SCREEN_HIGHER_IS_BETTER = {
     "beta_stability": False,
 }
 
-SCREEN_WEIGHTS = {
-    "correlation": 1.0,  # higher is better
-    "half_life_days": 1.0,  # shorter is better, and a pair with no half-life is dropped
-    "crossings_per_year": 1.0,  # more round trips is better
-    "beta_stability": 1.0,  # lower is better: one relationship, not a different one each regime
-}
-
 # --- Backtest ---
 
-# Defaults for backtest.Rules. Adjustable per request; these are what an unqualified question gets.
+# Defaults for backtest.Rules, adjustable per request.
 IN_SAMPLE_FRAC = 0.70  # chronological, never random
 ENTRY_Z = 2.0
 EXIT_Z = 0.5
 STOP_Z = 4.0
 MAX_HOLD_SESSIONS = 60
-# A spread that needs longer than one maximum holding period to decay halfway back cannot complete a
-# round trip inside a trade, so the screen drops it. This is a real gate: OLS on a random walk is
-# biased toward a slightly negative slope, so a wandering spread reports a long finite half-life
-# rather than none at all, and without a ceiling it would rank as if it mean-reverted.
+
+# A spread that cannot halve within one maximum hold is dropped (a random walk shows a long one).
 MAX_HALF_LIFE_DAYS = float(MAX_HOLD_SESSIONS)
+
 COST_BPS = 5.0  # per leg, per fill
 BORROW_BPS_ANNUAL = 50.0  # on the short leg
 

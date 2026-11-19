@@ -1,15 +1,8 @@
-"""Converge: the web surface. Routes, the price tape and the page.
-
-No agent logic lives here: /chat hands the question to orchestrator.answer(), so Phase 3's
-Clarifier/Lead/Researcher/Writer split will be a change inside that function, not in this file. The
-live agent panel will be the exception and will touch this module, because it needs a GET /stream
-route and a per-session contexts object; neither exists yet.
-"""
+"""Converge web surface: routes, the price tape and the page. No agent logic lives here."""
 
 import functools
 import gzip
 import json
-import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
@@ -25,25 +18,22 @@ from plotly.offline import get_plotlyjs
 from pydantic import BaseModel
 
 import config
-import data
-import orchestrator
-import refdata
+from pipeline import orchestrator
+from sources import data, refdata
 
 # --- Config ---
 
-# Most-watched US tickers for the scrolling tape: index funds, the VIX, then large caps.
+# Kept short: each symbol costs one rate-limited Cboe fetch at startup.
 TAPE_SYMBOLS = [
-    "SPY", "QQQ", "VOO", "VIX", "NVDA", "MSFT", "AAPL", "GOOG", "AMZN", "META", "AVGO", "TSLA", "BRK.B",
-    "JPM", "LLY", "V", "WMT", "XOM", "ORCL", "NFLX", "COST", "GS", "MS", "AMD", "PLTR",
+    "SPY", "QQQ", "VIX", "NVDA", "MSFT", "AAPL", "GOOG", "AMZN",
+    "META", "TSLA", "NFLX", "AMD", "PLTR", "JPM", "GS", "MS",
 ]
 INDEX_NAMES = {"VIX": "Cboe Volatility Index"}  # indices are not in the symbol directory
-TAPE_MAX_AGE = 3600  # seconds; a long-running server re-quotes once the tape is this old
-TAPE_RETRY = 300  # seconds before trying again after every quote failed (Cboe rate limits bursts)
 
-# Every session's history lives in one SQLite file, which on Cloud Run is in memory: it lasts only as long as the instance.
+# On Cloud Run this file is in memory, so history lasts only as long as the instance.
 SESSIONS_DB = "conversations.db"
 
-# session_id -> SQLiteSession, made once and reused: each holds a sqlite connection and a lock refcount only close() frees.
+# Reused: each session holds a sqlite connection that only close() frees.
 sessions: dict[str, SQLiteSession] = {}
 
 
@@ -53,9 +43,10 @@ def session_for(session_id: str) -> SQLiteSession:
         sessions[session_id] = SQLiteSession(session_id, SESSIONS_DB)
     return sessions[session_id]
 
+
 # --- Tape ---
 
-tape = {"at": 0.0, "rows": []}  # the saved quotes and when they were fetched
+tape = {"rows": []}
 
 
 def tape_row(symbol: str) -> dict | None:
@@ -71,8 +62,7 @@ def tape_row(symbol: str) -> dict | None:
         return None
     last, prev = bars[-1], bars[-2]
     try:
-        # Reference table first: no network call, and the name matches what the screen reports.
-        # data.company_name() is the fallback for symbols outside the table, such as the indices.
+        # Reference table first: no network call.
         name = INDEX_NAMES.get(symbol) or refdata.name_for(symbol) or data.company_name(symbol)
     except Exception:  # the name is a nicety
         name = None
@@ -92,14 +82,9 @@ def tape_row(symbol: str) -> dict | None:
 
 
 def refresh_tape() -> None:
-    """Quote every tape symbol, a few at a time. Keeps the old quotes if every request fails."""
+    """Quote every tape symbol once, at startup; no refresh, to spare the rate-limited feed."""
     with ThreadPoolExecutor(5) as pool:
-        rows = [row for row in pool.map(tape_row, TAPE_SYMBOLS) if row]
-    if rows:
-        tape.update(at=time.time(), rows=rows)
-    else:
-        # Keep whatever quotes we had and back-date the clock so the next attempt is TAPE_RETRY away.
-        tape["at"] = time.time() - TAPE_MAX_AGE + TAPE_RETRY
+        tape["rows"] = [row for row in pool.map(tape_row, TAPE_SYMBOLS) if row]
 
 
 # --- FastAPI app ---
@@ -107,8 +92,8 @@ def refresh_tape() -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    refresh_tape()  # quote once before the first visitor arrives
-    _plotly_js()  # gzip the bundle now rather than making the first chart request wait
+    refresh_tape()
+    _plotly_js()  # gzip now so the first chart request does not wait
     yield
 
 
@@ -124,31 +109,22 @@ class ChatRequest(BaseModel):
 class ChatResponse(BaseModel):
     response: str
     session_id: str
-    tool_calls: list[dict]  # each is {name, args, result, agent}, in completion order
+    # In completion order; the page re-sorts by start time to show the fan-out's overlap.
+    tool_calls: list[dict]
     charts: list[dict] = []  # Plotly figure specs for the page, never sent to the model
 
 
 @functools.cache
 def _plotly_js() -> bytes:
-    """Plotly's bundle, gzipped once at first use.
-
-    Cached as *bytes*, not str, because a Response would otherwise re-encode 4.8 MB on every
-    request. Gzipped here rather than by middleware so the work happens once, not per visitor:
-    4.8 MB becomes about 1.1 MB, which is the whole first-paint budget on a slow connection.
-    """
+    """Plotly's bundle, gzipped once and cached as bytes (4.8 MB -> ~1.1 MB)."""
     return gzip.compress(get_plotlyjs().encode(), 6)
 
 
 @app.get("/plotly-{version}.js")
 def plotly_js(version: str):
-    """Serve Plotly from the installed package rather than a CDN.
+    """Serve Plotly from the installed package, not a CDN.
 
-    Two reasons: a grader whose network blocks the CDN would see no charts at all, and the JS
-    version always matches the Python that generated the figure specs.
-
-    The version is in the path so the long cache is safe. With `immutable` on a bare /plotly.js, a
-    browser would keep serving a stale 4.8 MB bundle for a year after an upgrade, and even a hard
-    refresh would not clear it.
+    The version is in the path so the year-long immutable cache never pins a stale bundle.
     """
     return Response(
         _plotly_js(),
@@ -160,8 +136,6 @@ def plotly_js(version: str):
 @app.get("/", response_class=HTMLResponse)
 def index():
     """The page, with everything it shows built in so it needs no second request."""
-    if time.time() - tape["at"] > TAPE_MAX_AGE:
-        refresh_tape()
     page_config = {
         "tape": tape["rows"],
         "models": list(config.RESEARCHER_MODELS),
@@ -182,7 +156,7 @@ async def chat(request: ChatRequest):
     try:
         result = await orchestrator.answer(request.message, session_for(session_id), request.model)
     except Exception as e:
-        # The backstop for what answer() does not handle (bad credentials, billing): show it in the chat, not as a 500.
+        # Backstop (e.g. bad credentials): show the error in the chat, not as a 500.
         result = {"response": f"Model call failed: {type(e).__name__}: {str(e)[:300]}", "tool_calls": [], "charts": []}
 
     return ChatResponse(session_id=session_id, **result)
@@ -190,20 +164,17 @@ async def chat(request: ChatRequest):
 
 @app.post("/clear")
 async def clear(session_id: str | None = None):
-    """Forget a conversation: drop the cached session object, then delete its rows.
-
-    Both halves matter. Popping alone would leave the history on disk for anyone who kept the id;
-    clearing alone would leave a stale object in the cache holding an open connection.
-    """
+    """Forget a conversation: drop the cached session and delete its rows (both are needed)."""
     if session_id:
         session = sessions.pop(session_id, None) or SQLiteSession(session_id, SESSIONS_DB)
         try:
-            await session.clear_session()  # deletes from both agent_messages and agent_sessions
+            await session.clear_session()
         finally:
-            # It is already out of the cache, so nothing else would ever close it if this raised.
+            # Already out of the cache, so nothing else would close it.
             session.close()
     return {"status": "ok"}
 
 
 if __name__ == "__main__":
+    # Local runs only. Cloud Run runs `uvicorn app:app`: do not rename this module or `app`.
     uvicorn.run(app, host="127.0.0.1", port=8000)
