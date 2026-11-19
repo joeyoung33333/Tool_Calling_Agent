@@ -1,15 +1,6 @@
-"""One question in, one answer out.
+"""One question in, one answer out: the Clarifier gate, then an analyst or the research pipeline.
 
-`answer()` is the seam between the web layer and the agents: Lead -> parallel Researchers ->
-Writer, with every budget from config.py. app.py does not know any of this exists.
-
-The division of tools is what makes a fabricated number hard rather than merely discouraged: the
-Lead holds only `research` and `write_report`, the Researchers hold every data tool but a clean
-context with one brief, and the Writer holds nothing, so the only numbers it can reach are the
-findings Python put in front of it.
-
-Every failure here degrades rather than raising, and the run's tool calls are always returned: a
-partial answer with its evidence visible beats an exception string.
+The Writer holds no tools, so it can only use findings Python hands it. Failures degrade, not raise.
 """
 
 import asyncio
@@ -25,16 +16,13 @@ from pipeline.schemas import Clarification
 
 EMPTY = "The model returned an empty answer. Please try again."
 
-# No turn count: _salvage is reached from both the analyst path (MAX_TURNS) and the Lead's
-# (LEAD_TURNS), so naming one of them would report the wrong number on the other.
+# No turn count: both the analyst (MAX_TURNS) and the Lead (LEAD_TURNS) can reach it.
 OUT_OF_TURNS = (
     "I hit my turn limit on this question and could not assemble an answer I can stand behind. "
     "The tool calls below show what was tried. Try a narrower question."
 )
 
-# Prefixed onto every clarifying reply so the next turn can see we already asked. Checked in
-# Python, not the prompt: a model asked "have you already asked this?" will sometimes say no, and a
-# gate that can loop is worse than no gate.
+# Prefixed onto every clarifying reply; checked in Python so the gate can never loop.
 CLARIFY_MARK = "To point the screen at the right names: "
 
 NOTHING_FOUND = (
@@ -43,8 +31,8 @@ NOTHING_FOUND = (
 )
 
 OVER_TIME = (
-    "_This question hit the {secs}s limit, so the answer below uses only what had been gathered by "
-    "then. A narrower question will finish._"
+    "**This question ran out of time**, so the answer below uses only what had been gathered by "
+    "then. A narrower question will finish."
 )
 
 RATE_LIMITED = (
@@ -54,35 +42,26 @@ RATE_LIMITED = (
 
 
 async def answer(question: str, session: Session | None, researcher_model: str) -> dict:
-    """Answer one question, continuing `session`'s conversation if there is one.
-
-    Returns the body of /chat minus the session id: the answer, every tool call with the agent that
-    made it, and any charts built for the page.
-    """
+    """Answer one question, continuing `session`; returns /chat's body minus the session id."""
     recorder = ToolRecorder()
     model_id = config.RESEARCHER_MODELS[researcher_model]
     context = RunContext(recorder=recorder, model_id=model_id)
 
-    # No model_id: the gate is pinned to config.REASONING_MODEL and does not follow the dropdown.
+    # Only the Analyst and Researchers follow the dropdown; the rest are pinned.
     verdict = await _clarify(question, session, context)
     if verdict.reply:
         return {"response": verdict.reply, "tool_calls": recorder.tool_calls, "charts": context.charts}
 
-    # A chart or a single lookup does not need a research desk; one analyst answers it in seconds.
-    # The gate decides, and nothing downstream has to know which path it took.
+    # A chart or single lookup goes to one analyst; the gate decides.
     agent = (roster.analyst.clone(model=roster.model(model_id)) if verdict.simple
-             else research.lead_agent(model_id))
+             else research.lead_agent())
 
-    # The only Runner.run in the project without a wall clock, and the outermost one: every nested
-    # call was capped while this was free to run as long as its retries allowed. TOTAL_BUDGET_S was
-    # checked inside the research tool, which cannot interrupt a model call already in flight.
-    # Reserve a slice so a run that spends everything researching can still write up what it has.
-    budget = max(15.0, config.TOTAL_BUDGET_S - config.WRITEUP_RESERVE_S)
-    # The top-level agent's own span. Its group was otherwise derived from its tool calls, so the
-    # timeline showed a gap between the Clarifier returning and the Lead's first call - the gap was
-    # the Lead's first model round-trip, which nothing recorded, and it read as idle time.
+    # On the run's clock; research leaves the Writer's reserve, the fast path has no Writer.
+    budget = max(15.0, context.seconds_left() if verdict.simple else context.research_left())
     top_started = recorder.elapsed()
     top_name = "Analyst" if verdict.simple else "Lead"
+    needs_writer, ended_normally, timed_out, error = not verdict.simple, False, False, ""
+    retry = None
     try:
         result = await asyncio.wait_for(
             Runner.run(
@@ -95,36 +74,46 @@ async def answer(question: str, session: Session | None, researcher_model: str) 
             ),
             timeout=budget,
         )
-        # The analyst answers in its own words; the Lead answers through the writer, which leaves
-        # the audited report on the context rather than returning it.
-        if verdict.simple:
-            response = _attest(str(result.final_output or "").strip(), recorder.tool_calls, question)
-        else:
-            response = context.report.strip()
+        ended_normally = True
+        response = (_attest(str(result.final_output or "").strip(), recorder.tool_calls, question)
+                    if verdict.simple else "")
     except MaxTurnsExceeded:
-        # The turn cap is a budget, not a crash: write up whatever research already happened.
-        response = context.report.strip() or await _salvage(question, context)
+        error, response = "ran out of turns", OUT_OF_TURNS  # findings are still written up below
     except ModelBehaviorError:
-        # The Lead called a data tool it does not hold. Both routes share one session, so a turn
-        # the analyst answered leaves its get_price_history call in the history, and the Lead
-        # imitates it on a later turn. The analyst does hold that tool, so re-run there rather
-        # than showing the user a raw SDK error: the question is answerable, by the other agent.
-        response = await _retry_as_analyst(question, session, model_id, recorder, context)
+        # The Lead imitated a data tool call from the shared session history; the analyst holds it.
+        needs_writer, error, retry = False, "called a tool it does not have; retried as the Analyst", True
     except asyncio.TimeoutError:
-        # Out of wall clock. The findings are still on the context, so write them up rather than
-        # returning nothing after the user has already waited the whole budget.
-        response = context.report.strip() or await _salvage(question, context)
-        if response:
-            response = OVER_TIME.format(secs=int(budget)) + "\n\n" + response
+        timed_out, error, response = True, "timed out", OUT_OF_TURNS
     except litellm.RateLimitError:
-        response = RATE_LIMITED
+        error, response = "rate limited", RATE_LIMITED
+    except Exception as e:
+        # Any other model failure: findings already gathered are still written up.
+        error = type(e).__name__
+        response = f"The model call failed ({type(e).__name__}); the tool calls below show what was tried."
 
     recorder.note(
         name="agent", agent=top_name,
-        args={"question": question, "route": "fast path" if verdict.simple else "research desk"},
-        result=f"{len(recorder.tool_calls)} tool calls, {len(context.findings)} findings",
-        started_at=top_started, ended_at=recorder.elapsed(),
+        args={"question": question, "route": "fast path" if verdict.simple else "research path"},
+        result=(f"{error}; " if error else "")
+               + f"{len(recorder.tool_calls)} tool calls, {len(context.findings)} findings",
+        started_at=top_started, ended_at=recorder.elapsed(), error=error,
     )
+    if retry:
+        retry_started = recorder.elapsed()
+        response = await _retry_as_analyst(question, session, model_id, recorder, context)
+        recorder.note(name="agent", agent="Analyst",
+                      args={"question": question, "route": "fast path", "retry": True},
+                      result="retried on the fast path after the Lead failed",
+                      started_at=retry_started, ended_at=recorder.elapsed())
+
+    if needs_writer and (ended_normally or context.findings):
+        response = await research.write_report_now(context.report_question or question, context)
+        if session is not None and response:
+            # The writer runs outside the Lead's run, so save its answer by hand for the next turn.
+            await session.add_items([{"role": "assistant", "content": response}])
+    if timed_out:
+        response = OVER_TIME + "\n\n" + response
+
     return {
         "response": response or (NOTHING_FOUND if not context.findings else EMPTY),
         "tool_calls": recorder.tool_calls,
@@ -137,69 +126,73 @@ class Verdict:
     """What the gate decided: answer now, or which way to route."""
 
     reply: str = ""  # a finished response to return immediately; empty means carry on
-    simple: bool = False  # answer with one analyst rather than the research fan-out
+    simple: bool = False
 
 
 def _attest(answer: str, tool_calls: list[dict], question: str = "") -> str:
-    """Append the fast path's provenance, and flag any number not present in a tool result.
-
-    With no findings store to cite, the analyst path is held to the check that is available: every
-    number must appear in data this run fetched. Unverifiable figures are named, not removed.
-    """
+    """Append the fast path's provenance and name any number found in no tool result."""
     if not answer or not tool_calls:
         return answer
     checked = citations.verify_against_tools(answer, tool_calls, question)
     out = [answer]
     if checked["missing"]:
         out.append(
-            "\n_Not found in any tool result from this run, so treat as unverified: "
-            + ", ".join(checked["missing"][:8]) + "._"
+            "\n**Not found in any tool result from this run, so treat as unverified:** "
+            + ", ".join(checked["missing"][:8]) + "."
         )
     out.append(citations.sources_block(tool_calls))
     return "\n".join(part for part in out if part)
 
 
 async def _clarify(question: str, session: Session | None, context: RunContext) -> Verdict:
-    """Decide whether to answer the question, ask about it, or research it.
-
-    Runs before anything is fetched, so a question with no universe does not spend a research round
-    discovering that. Any failure routes to the full pipeline rather than blocking the desk.
-    """
-    if await _already_asked(session):
-        return Verdict()  # absolute anti-loop: never ask twice in one conversation
-    # The gate has no tools, so the SDK's tool hooks can never see it. Recorded by hand, or the
-    # transcript would show every run starting at the Lead and never mention the step that routed it.
-    started = context.recorder.elapsed() if context.recorder else 0.0
+    """Decide whether to answer, ask about, or research the question. Failure routes to research."""
+    asked = await _already_asked(session)
+    # The gate runs without the session, so it is told whether there is history to refer to.
+    context.first_turn = not await _has_history(session)
+    # The gate has no tools, so the SDK hooks never see it; each attempt is recorded by hand.
+    rec = context.recorder or ToolRecorder()
+    attempts = [(config.REASONING_MODEL, config.CLARIFIER_TIMEOUT_S),
+                (config.FALLBACK_MODEL, config.CLARIFIER_FALLBACK_TIMEOUT_S)]
     verdict = None
-    try:
-        result = await asyncio.wait_for(
-            Runner.run(roster.clarifier, question, session=None, context=context, max_turns=1),
-            timeout=config.CLARIFIER_TIMEOUT_S,
-        )
-        verdict = result.final_output
-    except Exception:
-        pass
-    if context.recorder:
-        context.recorder.note(
-            name="clarify", agent="Clarifier", args={"question": question},
-            result=(verdict.model_dump_json() if isinstance(verdict, Clarification)
-                    else "gate failed or timed out; routed to the full pipeline"),
-            started_at=started, ended_at=context.recorder.elapsed(),
-        )
+    for i, (model_id, timeout) in enumerate(attempts):
+        args = {"question": question, "model": roster.model_name(model_id)}
+        if i:
+            args["retry"] = True
+        started = rec.elapsed()
+        try:
+            result = await asyncio.wait_for(
+                Runner.run(roster.clarifier.clone(model=roster.model(model_id)), question,
+                           session=None, context=context, max_turns=1),
+                timeout=timeout)
+            verdict = result.final_output
+            error = "" if isinstance(verdict, Clarification) else "no verdict returned"
+        except Exception as e:
+            error = "timed out" if isinstance(e, asyncio.TimeoutError) else type(e).__name__
+        last = i == len(attempts) - 1
+        # Each attempt is its own row, so a failed one shows in red with what replaced it.
+        rec.note(name="clarify", agent="Clarifier", args=args,
+                 result=(verdict.model_dump_json() if not error
+                         else f"{error} on {args['model']}; "
+                         + ("routed to the full pipeline" if last
+                            else f"retrying on {roster.model_name(attempts[i + 1][0])}")),
+                 started_at=started, ended_at=rec.elapsed(), error=error)
+        if not error:
+            break
     if not isinstance(verdict, Clarification):
         return Verdict()
     if verdict.ready or not verdict.question.strip():
         return Verdict(simple=verdict.simple)
 
-    # Out of scope is a statement of fact, not a question, so it gets no marker: there is nothing
-    # to answer, and it must not consume this conversation's one clarification.
+    # Out of scope is a statement, not a question: no marker, so it does not use up the one ask.
     if verdict.out_of_scope:
         return Verdict(reply=verdict.question.strip())
+    # Never ask twice in one conversation; the gate still picks the route.
+    if asked:
+        return Verdict(simple=verdict.simple)
 
     reply = CLARIFY_MARK + verdict.question.strip()
     if session is not None:
-        # Written by hand because no Runner.run touched the session: the next turn must see both
-        # the vague question and what we asked, or it answers an orphaned reply.
+        # No Runner.run touched the session, so save both turns or the next answers an orphan.
         await session.add_items([
             {"role": "user", "content": question},
             {"role": "assistant", "content": reply},
@@ -208,11 +201,7 @@ async def _clarify(question: str, session: Session | None, context: RunContext) 
 
 
 async def _already_asked(session: Session | None) -> bool:
-    """Whether this conversation already contains a clarifying question of ours.
-
-    Matched on an assistant message that *starts* with the marker. Matching it anywhere would let a
-    user disable the gate for the rest of the conversation by quoting the phrase back.
-    """
+    """Whether an assistant message *starts* with our marker (quoting it back must not count)."""
     if session is None:
         return False
     try:
@@ -221,6 +210,16 @@ async def _already_asked(session: Session | None) -> bool:
         return False
     return any(item.get("role") == "assistant" and str(item.get("content", "")).startswith(CLARIFY_MARK)
                for item in items)
+
+
+async def _has_history(session: Session | None) -> bool:
+    """Whether this conversation already holds a message. A broken session counts as empty."""
+    if session is None:
+        return False
+    try:
+        return bool(await session.get_items())
+    except Exception:
+        return False
 
 
 async def _retry_as_analyst(question: str, session: Session | None, model_id: str,
@@ -236,17 +235,3 @@ async def _retry_as_analyst(question: str, session: Session | None, model_id: st
     except Exception:
         return ("I could not answer that one. Try naming the symbol or sector explicitly, "
                 "for example \"a price table for NVDA over the last year\".")
-
-
-async def _salvage(question: str, context: RunContext) -> str:
-    """Write the report the Lead ran out of turns before requesting.
-
-    A Lead that burns its turns has usually already done the research, so raising here would
-    discard findings that cost real time and tokens.
-    """
-    if not context.findings:
-        return OUT_OF_TURNS
-    try:
-        return await research.write_report_now(question, context)
-    except Exception:
-        return OUT_OF_TURNS

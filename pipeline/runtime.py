@@ -1,9 +1,6 @@
-"""The two per-run collection points the model never sees.
+"""Per-run state the model never sees: RunContext (charts, findings, budget) and ToolRecorder.
 
-`RunContext` carries what a tool drew and what the researchers found; `ToolRecorder` records what
-was called. Both are threaded into every `Runner.run` for a request - the context by `context=`,
-the recorder by `hooks=` - so the nested researcher runs report into the same transcript as the
-Lead, and share one clock.
+Both are threaded into every Runner.run, so nested researcher runs share one transcript and clock.
 """
 
 import json
@@ -18,37 +15,31 @@ import config
 
 @dataclass
 class RunContext:
-    """Per-request state. One instance per orchestrator.answer() call.
-
-    A tool reaches it through a first parameter annotated `RunContextWrapper[RunContext]`, which the
-    SDK keeps out of the schema the model sees. That is what `charts` needs: a tool result is
-    replayed on every later turn of the session, so figures must never go to the model.
+    """Per-request state, one per orchestrator.answer() call, reached through a RunContextWrapper
+    that the SDK keeps out of the model's schema, so `charts` never reach the model.
     """
 
     charts: list[dict] = field(default_factory=list)  # Plotly specs for the page only
 
     def draw(self, label: str, figure: dict, agent: str = "") -> None:
-        """Keep a figure for the page, unless an identical one was already drawn this run.
-
-        Two researchers handed overlapping briefs screen the same universe and return the same
-        table, which reached the reader as the same chart twice. Compared on `data` rather than the
-        whole figure, because the two copies differed only in a title built from the arguments -
-        same rows, same order, drawn twice. Different data is always a different chart.
-        """
+        """Keep a figure for the page, unless one with identical `data` was drawn this run."""
         if any(c["figure"].get("data") == figure.get("data") for c in self.charts):
             return
         self.charts.append({"symbol": label, "figure": figure, "agent": agent})
 
-    # What the fan-out needs to start a researcher.
     recorder: Any = None  # the run's ToolRecorder, so nested runs record into the same transcript
-    model_id: str = ""  # the LiteLLM id the caller picked, so researchers match the chosen model
+    model_id: str = ""  # the dropdown's LiteLLM id; only the Researchers read it from here
+
+    # The Clarifier runs without the session, so Python tells it whether this is the first message.
+    first_turn: bool = True
 
     # The evidence store, keyed by the id Python minted.
     findings: dict[str, dict] = field(default_factory=dict)
     gaps: list[str] = field(default_factory=list)
 
     # Loop control, counted here so the prompt cannot negotiate it.
-    report: str = ""  # the writer's finished answer, set by research.write_report
+    report_question: str = ""  # the Lead's restated question, set by research.write_report
+    refused: str = ""  # why research() just declined to run, so its row is marked failed
     rate_limited: int = 0  # upstream 429s this run, from the model or a data feed
     rounds_used: int = 0
     started_at: float = field(default_factory=time.monotonic)
@@ -58,12 +49,7 @@ class RunContext:
         self.rate_limited += 1
 
     def throttled(self) -> bool:
-        """Whether the run has been refused often enough to stop starting new work.
-
-        A rate limit is not always transient: when a per-minute quota is simply gone, retrying
-        spends the budget and returns nothing. Past this many, write up what is already gathered
-        instead of dispatching researchers that will be refused too.
-        """
+        """Whether the run has been refused often enough to stop starting new work."""
         return self.rate_limited >= config.MAX_RATE_LIMITS
 
     def over_budget(self) -> bool:
@@ -74,13 +60,18 @@ class RunContext:
         """Wall clock remaining, never negative."""
         return max(0.0, config.TOTAL_BUDGET_S - (time.monotonic() - self.started_at))
 
+    def research_left(self) -> float:
+        """Wall clock left for research: the total minus the write-up reserve.
+
+        Researchers are timed against this, not seconds_left(), so a round returns before the cut.
+        """
+        return max(0.0, self.seconds_left() - config.WRITEUP_RESERVE_S)
+
 
 class ToolRecorder(RunHooks):
     """Collects {name, args, result, agent, started_at, ended_at} per finished tool call.
 
-    Completion order is not dispatch order once researchers run in parallel, so each call carries
-    its own agent and clock rather than relying on position. Those timestamps are the only evidence
-    the fan-out overlapped: the Lead's transcript shows one `research` call however many it started.
+    Each call carries its own agent and clock: completion order is not dispatch order in parallel.
     """
 
     def __init__(self) -> None:
@@ -89,7 +80,7 @@ class ToolRecorder(RunHooks):
         self._origin = time.monotonic()
 
     def elapsed(self) -> float:
-        """Seconds since this run began. Public so research.py stamps its synthetic rows on the same clock."""
+        """Seconds since this run began; research.py stamps its synthetic rows on this clock."""
         return round(time.monotonic() - self._origin, 3)
 
     async def on_tool_start(self, context, agent, tool) -> None:
@@ -97,29 +88,47 @@ class ToolRecorder(RunHooks):
 
     async def on_tool_end(self, context, agent, tool, result) -> None:
         # No await below, so appending needs no lock.
-        self.tool_calls.append({
+        row = {
             "name": tool.name,
             "args": _arguments(context),
             "result": str(result),
             "agent": agent.name,
             "started_at": self._started.pop(id(context), self.elapsed()),
             "ended_at": self.elapsed(),
-        })
+        }
+        error = _error_of(str(result))
+        run = getattr(context, "context", None)
+        if tool.name == "research" and getattr(run, "refused", ""):
+            error, run.refused = run.refused, ""
+        if error:
+            row["error"] = error  # drawn in red, like a failed agent
+        self.tool_calls.append(row)
 
-    def note(self, name: str, agent: str, args: dict, result: str, started_at: float, ended_at: float) -> None:
+    def note(self, name: str, agent: str, args: dict, result: str, started_at: float, ended_at: float,
+             error: str = "") -> None:
         """Record a step the SDK cannot see, such as one researcher inside the fan-out.
 
-        The Lead calls `research` once and the SDK reports one tool call, so without this the
-        transcript would claim four researchers ran as a single step.
+        `error` marks a failed attempt, which the page draws in red; it is omitted when empty.
         """
-        self.tool_calls.append({
-            "name": name, "args": args, "result": result, "agent": agent,
-            "started_at": started_at, "ended_at": ended_at,
-        })
+        row = {"name": name, "args": args, "result": result, "agent": agent,
+               "started_at": started_at, "ended_at": ended_at}
+        if error:
+            row["error"] = error
+        self.tool_calls.append(row)
+
+
+def _error_of(result: str) -> str:
+    """The `error` a tool returned as JSON, shortened for a label; empty if it succeeded."""
+    if not result.startswith('{"error"'):
+        return ""
+    try:
+        return str(json.loads(result).get("error", ""))[:80]
+    except (TypeError, ValueError):
+        return ""
 
 
 def _arguments(context) -> dict:
-    """This call's arguments as a dict. A model can emit malformed JSON; the transcript must survive it."""
+    """This call's arguments as a dict; malformed JSON from a model must not break this."""
     raw = getattr(context, "tool_arguments", None)
     try:
         return json.loads(raw or "{}")

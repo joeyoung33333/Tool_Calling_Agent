@@ -1,8 +1,4 @@
-"""Converge: the web surface. Routes, the price tape and the page.
-
-No agent logic lives here. /chat hands the question to orchestrator.answer(), and the
-Clarifier/Lead/Researcher/Writer pipeline sits entirely behind that call.
-"""
+"""Converge web surface: routes, the price tape and the page. No agent logic lives here."""
 
 import functools
 import gzip
@@ -27,19 +23,17 @@ from sources import data, refdata
 
 # --- Config ---
 
-# The names a reader recognises without being told. Every symbol costs one Cboe history fetch at
-# startup, against the same rate-limited endpoint the screen needs, so the list is short.
+# Kept short: each symbol costs one rate-limited Cboe fetch at startup.
 TAPE_SYMBOLS = [
     "SPY", "QQQ", "VIX", "NVDA", "MSFT", "AAPL", "GOOG", "AMZN",
     "META", "TSLA", "NFLX", "AMD", "PLTR", "JPM", "GS", "MS",
 ]
 INDEX_NAMES = {"VIX": "Cboe Volatility Index"}  # indices are not in the symbol directory
 
-# One SQLite file for every session. On Cloud Run it is in memory, so history lasts only as long
-# as the instance.
+# On Cloud Run this file is in memory, so history lasts only as long as the instance.
 SESSIONS_DB = "conversations.db"
 
-# Made once and reused: each session holds a sqlite connection and a lock refcount only close() frees.
+# Reused: each session holds a sqlite connection that only close() frees.
 sessions: dict[str, SQLiteSession] = {}
 
 
@@ -52,7 +46,7 @@ def session_for(session_id: str) -> SQLiteSession:
 
 # --- Tape ---
 
-tape = {"rows": []}  # the quotes taken at startup
+tape = {"rows": []}
 
 
 def tape_row(symbol: str) -> dict | None:
@@ -68,7 +62,7 @@ def tape_row(symbol: str) -> dict | None:
         return None
     last, prev = bars[-1], bars[-2]
     try:
-        # Reference table first: no network call, and it matches the name the screen reports.
+        # Reference table first: no network call.
         name = INDEX_NAMES.get(symbol) or refdata.name_for(symbol) or data.company_name(symbol)
     except Exception:  # the name is a nicety
         name = None
@@ -88,11 +82,7 @@ def tape_row(symbol: str) -> dict | None:
 
 
 def refresh_tape() -> None:
-    """Quote every tape symbol, a few at a time. Called once, at startup.
-
-    No periodic refresh: the strip is a decoration, and re-quoting it spends requests on the
-    rate-limited feed the screen needs. If every quote fails it stays empty and the page hides it.
-    """
+    """Quote every tape symbol once, at startup; no refresh, to spare the rate-limited feed."""
     with ThreadPoolExecutor(5) as pool:
         tape["rows"] = [row for row in pool.map(tape_row, TAPE_SYMBOLS) if row]
 
@@ -102,8 +92,8 @@ def refresh_tape() -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    refresh_tape()  # quote once before the first visitor arrives
-    _plotly_js()  # gzip the bundle now rather than making the first chart request wait
+    refresh_tape()
+    _plotly_js()  # gzip now so the first chart request does not wait
     yield
 
 
@@ -119,29 +109,22 @@ class ChatRequest(BaseModel):
 class ChatResponse(BaseModel):
     response: str
     session_id: str
-    # {name, args, result, agent, started_at, ended_at}, in completion order. The page re-sorts by
-    # start time to draw the run, which is how the fan-out's overlap becomes visible.
+    # In completion order; the page re-sorts by start time to show the fan-out's overlap.
     tool_calls: list[dict]
     charts: list[dict] = []  # Plotly figure specs for the page, never sent to the model
 
 
 @functools.cache
 def _plotly_js() -> bytes:
-    """Plotly's bundle, gzipped once at first use.
-
-    Cached as *bytes* so a Response does not re-encode 4.8 MB per request, and gzipped here rather
-    than by middleware so the work happens once rather than per visitor: 4.8 MB becomes ~1.1 MB.
-    """
+    """Plotly's bundle, gzipped once and cached as bytes (4.8 MB -> ~1.1 MB)."""
     return gzip.compress(get_plotlyjs().encode(), 6)
 
 
 @app.get("/plotly-{version}.js")
 def plotly_js(version: str):
-    """Serve Plotly from the installed package rather than a CDN.
+    """Serve Plotly from the installed package, not a CDN.
 
-    A blocked CDN would mean no charts at all, and this way the JS matches the Python that
-    generated the specs. The version is in the path, so the year-long `immutable` cache cannot
-    pin a stale bundle that even a hard refresh would not clear.
+    The version is in the path so the year-long immutable cache never pins a stale bundle.
     """
     return Response(
         _plotly_js(),
@@ -173,8 +156,7 @@ async def chat(request: ChatRequest):
     try:
         result = await orchestrator.answer(request.message, session_for(session_id), request.model)
     except Exception as e:
-        # Backstop for what answer() does not handle, such as bad credentials: show it in the
-        # chat rather than as a 500.
+        # Backstop (e.g. bad credentials): show the error in the chat, not as a 500.
         result = {"response": f"Model call failed: {type(e).__name__}: {str(e)[:300]}", "tool_calls": [], "charts": []}
 
     return ChatResponse(session_id=session_id, **result)
@@ -182,23 +164,17 @@ async def chat(request: ChatRequest):
 
 @app.post("/clear")
 async def clear(session_id: str | None = None):
-    """Forget a conversation: drop the cached session object, then delete its rows.
-
-    Both halves matter. Popping alone leaves the history on disk for anyone who kept the id;
-    clearing alone leaves a stale cached object holding an open connection.
-    """
+    """Forget a conversation: drop the cached session and delete its rows (both are needed)."""
     if session_id:
         session = sessions.pop(session_id, None) or SQLiteSession(session_id, SESSIONS_DB)
         try:
-            await session.clear_session()  # deletes from both agent_messages and agent_sessions
+            await session.clear_session()
         finally:
-            # Already out of the cache, so nothing else would ever close it if clear raised.
+            # Already out of the cache, so nothing else would close it.
             session.close()
     return {"status": "ok"}
 
 
 if __name__ == "__main__":
-    # Local runs only. Cloud Run never executes this: the build trigger supplies its own
-    # entrypoint, `uvicorn app:app --host 0.0.0.0 --port $PORT`. Renaming this module or the `app`
-    # object would break that entrypoint.
+    # Local runs only. Cloud Run runs `uvicorn app:app`: do not rename this module or `app`.
     uvicorn.run(app, host="127.0.0.1", port=8000)

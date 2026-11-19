@@ -1,12 +1,6 @@
 """The structured shapes the agents hand each other.
 
-Pydantic rather than dataclasses because the SDK turns these into the JSON schema it gives the
-model as `output_type`. **Every `description` below is written for the model, not for a reader of
-this file** - it is the only instruction the model gets about that field.
-
-Ids are deliberately absent from `Finding`: Python mints them in `research.py` after a researcher
-returns. A model asked to invent unique ids across parallel runs will collide, and a citation
-system whose keys collide is worse than none.
+Every `description` is sent to the model; `Finding` has no id because Python mints them.
 """
 
 from pydantic import BaseModel, Field
@@ -15,7 +9,7 @@ from pydantic import BaseModel, Field
 class Clarification(BaseModel):
     """The gate's verdict on whether a question can be researched as asked."""
 
-    ready: bool = Field(description="True if the question can be researched as written, even if you had to assume something reasonable. False only if you genuinely cannot tell what to screen.")
+    ready: bool = Field(description="True if the question can be researched as written, even if you had to assume something reasonable. False only if there is nothing to work on, or the question is out of scope.")
     simple: bool = Field(default=False, description="True if one analyst with the tools can answer this directly; see SIMPLE vs RESEARCH in your instructions.")
     out_of_scope: bool = Field(default=False, description="True only if the question asks for an asset class or data the desk has no tool for at all. Then `question` holds the sentence that says so.")
     question: str = Field(default="", description="If not ready: the ONE question to ask back, in a single sentence. If out_of_scope: one sentence naming what is unavailable and what the desk can do instead. Empty when ready.")

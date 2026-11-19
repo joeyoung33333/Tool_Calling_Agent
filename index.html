@@ -15,9 +15,7 @@
                 --line: #5c4000;
                 --red: #ff4d4d;
                 --green: #00d26a;
-                /* One colour per agent, so a run reads at a glance. Amber is the Lead because it
-                   is the house colour and the Lead owns the run; the rest are distinguishable on
-                   black without competing with it. */
+                /* One colour per agent; amber, the house colour, marks the Lead. */
                 --ag-lead: #ffb000;
                 --ag-writer: #5ab0ff;
                 --ag-analyst: #c08bff;
@@ -25,7 +23,7 @@
                 --panel: #0d0900; /* tool-call rows */
                 --glow: rgba(255, 176, 0, 0.18);
                 --tip-delay: 0.5s; /* every tooltip waits this long under the pointer */
-                /* Background: tune here. Pick the look with ?bg=twinkle (default) or ?bg=none in the URL */
+                /* Background: pick ?bg=twinkle (default) or ?bg=none in the URL */
                 --dot-opacity: 0.25; /* the static dots, 0 to 1 */
                 --dot-size: 1px; /* radius of each dot */
                 --dot-gap: 24px; /* spacing between dots */
@@ -66,7 +64,6 @@
                 border-radius: 10px;
                 box-shadow: 0 24px 100px rgba(255, 176, 0, 0.075), 0 8px 24px rgba(0, 0, 0, 0.6);
             }
-            /* Behind the pane: static dots and twinkling dots. Nothing slides. */
             #backdrop {
                 position: fixed;
                 inset: 0;
@@ -102,7 +99,6 @@
                 display: none;
             }
             @keyframes twinkle {
-                /* dark most of the time, then a quick flash that fades away: a twinkle, not a slow pulse */
                 0%,
                 70%,
                 100% {
@@ -138,8 +134,6 @@
                 border-left: 1px solid rgba(0, 0, 0, 0.4);
             }
 
-            /* One panel per run. Each row is a tool call drawn to scale and expandable, so a
-               fan-out of twenty calls reads as one block rather than twenty stacked rows. */
             div.runpanel {
                 padding: 0.5rem 0.75rem;
                 font-size: 0.7rem;
@@ -174,9 +168,7 @@
             details.rp-row > summary:hover {
                 background: var(--hover);
             }
-            /* Unscoped on purpose: these style BOTH an agent row (.rp-group) and a tool row
-               (.rp-row). Scoped to .rp-row, an agent's bar got no position or height and
-               simply did not draw - which is why the Clarifier and the Lead had no bars. */
+            /* Unscoped on purpose: these style both agent (.rp-group) and tool (.rp-row) rows. */
             .rp-name {
                 overflow: hidden;
                 text-overflow: ellipsis;
@@ -211,12 +203,8 @@
                 word-break: break-word;
                 font-size: 0.68rem;
             }
-            /* Agent colours, applied to both the bar and its label. */
-            /* A group is one agent; its rows are that agent's tool calls, indented under it. */
             details.rp-group { margin: 0; }
-            /* Agent rows and tool rows share one grid, so the name, the bar and the duration line
-               up at every depth. Indentation lives on the name cell: putting it on the row would
-               shift the grid itself and the columns would stop agreeing. */
+            /* Shared grid: indent the name cell, not the row, or the columns drift. */
             details.rp-group > summary,
             details.rp-row > summary {
                 display: grid;
@@ -233,12 +221,9 @@
                 content: "\25b8"; color: var(--dim); font-size: 10px;
                 display: inline-block; width: 11px; transition: transform .12s;
             }
-            /* An agent with no tool calls has nothing behind its caret, so it does not get one. */
             .rp-leaf > summary .rp-name::before { content: ""; }
             .rp-leaf > summary { cursor: default; }
             details[open] > summary .rp-name::before { transform: rotate(90deg); }
-            /* An agent carries its colour swatch and its name in its own colour; a tool call is
-               dimmer and unmarked. The difference should be readable at a glance, not by reading. */
             .rp-is-agent { font-weight: 600; }
             .rp-is-agent .rp-dot { margin-right: 6px; vertical-align: 1px; }
             .rp-is-tool { color: var(--muted) !important; font-weight: 400; }
@@ -249,7 +234,7 @@
             .rp-sql { margin-left: calc(8px + var(--depth, 0) * 15px); }
             .rp-tool { font-weight: 600; }
 
-            /* The axis sits on the same grid, so a tick is directly above the bars it labels. */
+            /* Same grid as the rows, so each tick sits above the bars it labels. */
             .rp-axis {
                 display: grid; grid-template-columns: var(--rp-name-w) 1fr var(--rp-dur-w);
                 gap: 0.5rem; padding: 0 8px 3px; font-size: 9px; color: var(--dim);
@@ -260,14 +245,15 @@
                 content: ""; position: absolute; left: 0; top: 11px; width: 1px; height: 3px;
                 background: var(--line);
             }
-            /* The end labels are nudged inward to stay in bounds, but the mark must not move with
-               them or it points ~2% of the run away from the time it names. The mark is its own
-               element, positioned on the true offset; only the label shifts. */
+            /* Only the end labels shift inward; the tick mark stays on the true offset. */
             .rp-tick:first-child .rp-tick-label { transform: none; }
             .rp-tick:last-child .rp-tick-label { transform: translateX(-100%); }
             .rp-tick-label { display: inline-block; transform: translateX(-50%); }
             .rp-agent { font-weight: 600; }
             .rp-count { color: var(--dim); font-size: 10px; margin-left: 6px; }
+            /* A failed attempt is red; the retry that replaced it keeps its agent's colour. */
+            .rp-bar.rp-failed, .rp-dot.rp-failed { background: var(--red) !important; }
+            .rp-count.rp-err { color: var(--red); }
 
             .rp-legend {
                 display: flex; flex-wrap: wrap; gap: 4px 14px;
@@ -279,9 +265,7 @@
                 width: 8px; height: 8px; border-radius: 2px; display: inline-block;
                 background: var(--muted);  /* a swatch with no class must still be visible */
             }
-            /* A researcher's row takes its own ag-rN shade from the shade map, so this class only
-               ever reaches a chart tab or byline. Purple, not green: green means a positive return
-               in every number on this page, so a green agent would read as a verdict. */
+            /* Rows use the ag-rN shades; this class only reaches a chart tab or byline. */
             .rp-dot.ag-researcher { background: #c08bff; }
 
             .chart-tabs, .chart-solo { border: 1px solid var(--line); border-radius: 3px; margin-bottom: 12px; padding-bottom: 2px; }
@@ -324,9 +308,7 @@
                 color: var(--amber); font-size: 11px; line-height: 1.5;
             }
 
-            /* Four researcher shades, so two concurrent researchers are told apart at a glance. */
-            /* Purple shades, not green: green and red mean a positive and negative return in every
-               number on this page, so a green agent reads as a verdict. */
+            /* Researcher shades are purple: green and red mean positive and negative returns. */
             .ag-r1 .rp-bar, .rp-bar.ag-r1, .rp-dot.ag-r1 { background: #c08bff; }
             .ag-r2 .rp-bar, .rp-bar.ag-r2, .rp-dot.ag-r2 { background: #9a6bdd; }
             .ag-r3 .rp-bar, .rp-bar.ag-r3, .rp-dot.ag-r3 { background: #d9b3ff; }
@@ -341,7 +323,6 @@
             .rp-dot.ag-writer { background: var(--ag-writer); }
             .rp-dot.ag-analyst { background: var(--ag-analyst); }
 
-            /* The purpose block and the example picker, both inside the first message. */
             .intro-about { border: 1px solid var(--line); border-radius: 3px; padding: 9px 11px; margin-bottom: 12px; }
             .intro-title { font-size: 10px; letter-spacing: .1em; color: var(--amber); margin-bottom: 6px; }
             .intro-row { display: flex; gap: 10px; margin-bottom: 5px; font-size: 11px; line-height: 1.55; }
@@ -374,12 +355,7 @@
             .intro-cat[open] .intro-cat-head::before { transform: rotate(90deg); }
             .intro-cat[open] .intro-cat-head { border-bottom: 1px solid var(--line); }
             .intro-cat-n { color: var(--dim); font-size: 9px; margin-left: auto; }
-            /* The examples sit in a padded wrapper and fill it. Two earlier attempts got this
-               wrong: `calc(100% - 14px)` resolved against a box wider than the category and
-               overflowed by 6px, and `width: auto` on a <button> is shrink-to-fit, which left them
-               550px short. A padded parent plus `width: 100%` cannot be wrong either way.
-               No rule between examples: each is already a bordered box. The category name is
-               larger than the examples under it, which is the order a reader scans them. */
+            /* A <button> with width: auto shrinks to fit, hence width: 100%. */
             .intro-items { padding: 6px 7px; display: flex; flex-direction: column; gap: 5px; }
             .intro .intro-cat button {
                 display: block; width: 100%; margin: 0;
@@ -396,13 +372,8 @@
             .rp-name.ag-lead { color: var(--ag-lead); }
             .rp-name.ag-writer { color: var(--ag-writer); }
             .rp-name.ag-analyst { color: var(--ag-analyst); }
-            /* No per-row-kind grid here. A rule scoped to .rp-row set its own columns and left the
-               agent rows and the axis on the shared ones, so on a phone every tool call was drawn
-               against a track 128px further left and 1.5x wider than its own parent's. The phone
-               layout changes the variables (above), which every row and the axis read. */
+            /* No per-row-kind grid: the phone layout changes the shared variables instead. */
 
-            /* An inline [F1.2.1] citation. Hovering shows the finding behind it, so the evidence
-               list underneath can stay collapsed without the citation becoming opaque. */
             .cite {
                 color: var(--amber);
                 cursor: help;
@@ -429,7 +400,6 @@
                 margin-bottom: 0.15rem;
             }
 
-            /* Buttons: outlined by default (example queries); .solid is the amber action button */
             button {
                 font: inherit;
                 padding: 0.6rem 0.8rem;
@@ -599,7 +569,6 @@
                 scrollbar-width: thin;
                 scrollbar-color: var(--line) transparent;
             }
-            /* New rows ease in */
             .intro,
             .msg,
             div.runpanel,
@@ -693,15 +662,23 @@
                 border: 1px solid var(--line);
                 border-radius: 6px;
             }
-            /* The move across whatever window is zoomed to, under its chart. */
             div.chart-note {
                 max-width: 720px;
-                margin-top: -4px;
+                margin: 6px 0 2px;
+                padding: 0 8px;
                 font-size: 11px;
                 color: var(--faint);
                 display: flex;
                 gap: 8px;
                 align-items: baseline;
+            }
+            div.chart-caption {
+                max-width: 720px;
+                margin: 6px 0 4px;
+                padding: 0 8px;
+                font-size: 11px;
+                line-height: 1.5;
+                color: var(--faint);
             }
             div.chart-note b {
                 color: var(--dim);
@@ -774,7 +751,7 @@
                 div.chart {
                     border-radius: 4px;
                 }
-                div.chart-note {
+                div.chart-note, div.chart-caption {
                     font-size: 10px;
                 }
                 body {
@@ -823,20 +800,19 @@
             <div id="settings">
                 <label data-tip="Speed of the scrolling price tape. Off stops it; you can then scroll it by hand.">Tape <select id="tape-speed"></select></label>
                 <label class="left" data-tip="How often the background dots flash. Off stops them.">Twinkle <select id="twinkle"></select></label>
-                <label data-tip="Which Gemini model answers. Flash-Lite is the fastest and cheapest, Flash is stronger but slower. You can switch mid-chat and the conversation carries over.">Model <select id="model"></select></label>
+                <label data-tip="Model for the Analyst (fast path) and the Researchers (research path).&#10;Default: Gemini 3.5 Flash-Lite, the fastest. The Flash models are stronger but slower.&#10;Pinned: the Clarifier, Lead and Writer always use Gemini 3.8 Flash.&#10;Every agent reasons at medium. Switch mid-chat and follow-ups keep their context.">Model <select id="model"></select></label>
             </div>
             <div id="messages"></div>
             <div id="input-area">
-                <input type="text" id="user-input" placeholder="Which pairs in the energy sector are viable? Is LMT a good pair with RTX?" autocomplete="off" />
+                <input type="text" id="user-input" placeholder="Which pairs in the energy sector are viable? Is AMZN a good pair with NVDA?" autocomplete="off" />
                 <button class="solid" id="send-btn">Send</button>
             </div>
             <footer>Research only, not investment advice. Prices ~15 min delayed (the last close when the market is shut); news and SEC filings same day.</footer>
         </div>
-        <!-- Plotly from our own server, not a CDN: a blocked CDN would mean no charts at all.
-             app.py fills in the versioned path so the long cache header is safe. -->
+        <!-- Plotly is self-hosted: a blocked CDN would mean no charts at all. -->
         <script src="__PLOTLY_SRC__"></script>
         <script>
-            // The models and the tape quotes are injected by app.py when it serves this page.
+            // Models and tape quotes, injected by app.py when it serves this page.
             const config = __CONFIG__;
             const messages = document.getElementById("messages");
             const userInput = document.getElementById("user-input");
@@ -847,59 +823,48 @@
             const tape = document.getElementById("tape");
             let sessionId = null;
 
-            // Grouped by what each one exercises, so a first-time visitor can reach the
-            // interesting parts deliberately. The first three are the README's sample queries.
-            // [query, tags, what it does]. One clear use case per capability, chosen so the ten
-            // between them call all nine tools and show both routes. Symbols are names the class
-            // will recognise. Three of these are the README's required sample queries and must
-            // keep their exact wording: the energy screen, LMT/RTX, and the ETF count.
+            // [query, tags, blurb]. Energy and ETF-count match the README's sample queries.
             const EXAMPLE_GROUPS = [
-                ["Parallel research", [
+                ["Research Path: Parallel Research Agents", [
                     ["Which pairs in the energy sector are viable pair trades?",
-                     ["fans out \u2192 3-4 researchers", "screen_pairs", "holdout backtest",
-                      "NEGATIVE result: nothing survives"],
-                     "The Lead splits the sector into briefs that researchers work at the same time. screen_pairs fits every pair in Python, ranks them, and backtests the best on data they were not chosen on. Every pair comes back with a negative holdout Sharpe, so the answer is a well-evidenced \"no\" rather than a pick."],
-                    ["Screen the nasdaq_leveraged ETF family for viable pairs.",
-                     ["fans out", "screen_pairs", "ETF family universe",
-                      "POSITIVE result: pairs survive the gates"],
-                     "The counterpart to the energy screen, on the same machinery. An ETF family rather than a GICS sector \u2014 resolve_universe handles sector, sub-industry, family or an explicit list. Four pairs clear the gates here and QLD/TQQQ posts a positive holdout Sharpe on a profitable return, though its deflated Sharpe stays negative once the search width is charged for. Run both to watch the screen say yes and no on the same evidence."],
-                    ["Compare information technology and financials: which sector has better pairs?",
-                     ["fans out \u2192 2 sectors at once", "screen_pairs \u00d72", "capped universe"],
-                     "Two sectors screened concurrently and weighed against each other. Both hold 76 names against a 40-name cap, so watch it report a subset rather than claiming it covered the sector."],
+                     ["fans out \u2192 3-4 researchers", "screen_pairs", "holdout + deflated Sharpe",
+                      "NEGATIVE result: nothing survives", "~2 min"],
+                     "The Lead splits the sector into briefs that researchers work at the same time. screen_pairs fits all 210 pairs in Python, ranks them on the earlier data, and backtests the best eight on data they were not chosen on. No pair clears its deflated Sharpe, so the answer is a well-evidenced \"no\". The Lead sometimes opens a second round on a gap the first one names."],
+                    ["Are these viable pair trades: AMZN vs GOOGL, MS vs JPM, WMT vs TGT, KO vs PEP, and SPY vs QQQ?",
+                     ["fans out by pair", "analyze_pair x5", "mixed verdicts", "~2 min"],
+                     "Five named pairs become separate briefs worked in parallel, one analyze_pair each. Expect a mix: AMZN/GOOGL promising but undeflated, MS/JPM and SPY/QQQ losing on the holdout, and WMT/TGT and KO/PEP rejected outright for a negative hedge ratio - the textbook pairs do not hold up on this window."],
                     ["Which energy pairs diverged the most, and what caused those divergences?",
-                     ["fans out \u2192 3-4 researchers", "screen_pairs", "research_divergence", "get_news", "get_filings", "~1-2 min"],
-                     "The heaviest question here: screen the sector, find the widest divergences that lasted, then read news and SEC filings over exactly those windows to say whether each gap closed or the relationship broke."],
+                     ["fans out", "screen_pairs", "research_divergence", "news + filings", "~2 min"],
+                     "The heaviest question here: screen the sector, find the widest divergences that lasted, and read news and SEC filings over those windows. Expect it to say when that evidence does not settle whether a gap closed or the relationship broke."],
                 ]],
-                ["Sequential research", [
-                    ["Is LMT a good pair trade with RTX?",
-                     ["single analyst, no fan-out", "analyze_pair", "z-score chart"],
-                     "Answered directly in seconds by one analyst. analyze_pair returns the hedge ratio, half-life, a holdout backtest and a z-score chart with its entry and exit bands."],
-                    ["What explains the biggest recent divergence between GS and MS?",
-                     ["single analyst", "analyze_pair", "research_divergence", "news + filings"],
-                     "Goldman Sachs against Morgan Stanley. analyze_pair finds the divergence episodes, then research_divergence pulls news and SEC filings over exactly that window."],
-                ]],
-                ["Text2SQL", [
+                ["Fast Path: Single Analyst Agent", [
+                    ["Is AMZN a good pair trade with NVDA?",
+                     ["no fan-out", "analyze_pair", "z-score chart", "POSITIVE holdout, undeflated", "~20-40s"],
+                     "One named pair goes straight to the analyst. analyze_pair fits the hedge ratio on the earlier data and backtests the later data: a positive holdout Sharpe over five trades. One pair tested means no deflated Sharpe, so the agent calls it promising, not proven."],
                     ["How many ETFs are in the reference database, and which ETF families are covered?",
-                     ["single analyst", "get_reference_schema", "query_reference"],
-                     "Reads the columns and their real values, then writes and runs its own SELECT. The query it wrote is shown with the answer."],
-                    ["Which S&P 500 sub-industries have at least 8 companies?",
-                     ["single analyst", "query_reference", "GROUP BY / HAVING"],
-                     "A query the agent composes itself against a read-only connection that refuses writes, file access and DuckDB's own catalog."],
-                ]],
-                ["Tool calls", [
+                     ["Text2SQL", "get_reference_schema", "query_reference"],
+                     "Reads the columns and their real values, then writes and runs its own SELECT against a read-only connection. The SQL it wrote is shown in the timeline."],
                     ["Chart AAPL's price over the last 6 months.",
-                     ["single analyst", "get_chart"],
-                     "get_chart draws an interactive line chart. get_price_history returns numbers, so a request to see something routes here instead."],
+                     ["get_chart"],
+                     "An interactive closing-price chart. Drag across it to zoom, and the note underneath reports the move over the window you chose."],
                     ["How volatile has NVDA been over the past year?",
-                     ["single analyst", "get_price_history", "month-end table"],
+                     ["get_price_history", "month-end table"],
                      "Annualized realized volatility, period return, high and low from Cboe daily bars, with a month-end price table."],
                     ["What news and SEC filings came out for TSLA this month?",
-                     ["single analyst", "get_news", "get_filings"],
+                     ["get_news", "get_filings"],
                      "Headlines plus 8-K item codes, 10-Ks and 10-Qs. An item code says what actually happened, which beats a headline."],
+                ]],
+                ["Clarification Path: Single Clarification Agent", [
+                    ["Find a good cryptocurrency pair trade?",
+                     ["out of scope", "declines in the first sentence"],
+                     "Crypto, options and FX are outside the data. There is nothing to ask, so the agent says what it does not cover and what it can do instead, without using the conversation's one clarification."],
+                    ["Chart this symbol.",
+                     ["Clarifier gate", "asks which symbol", "no tools called", "asks at most once"],
+                     "A request with its subject missing, so the gate asks which symbol before anything is fetched. Reply with a ticker and the same conversation charts it. It never asks twice in one conversation: that is checked in Python, not in a prompt."],
                 ]],
             ];
 
-            // Create an element with an optional class and text. textContent keeps model output from being parsed as HTML.
+            // textContent, so model output is never parsed as HTML.
             function make(tag, className = "", text = "") {
                 const node = document.createElement(tag);
                 node.className = className;
@@ -907,7 +872,7 @@
                 return node;
             }
 
-            // Tape and twinkle speeds: time per loop or flash as a multiple of the Normal setting in the stylesheet (bigger is slower, 0 is off).
+            // Multiples of the Normal CSS speed: bigger is slower, 0 is off.
             const SPEEDS = { Off: 0, Slow: 1.5, Normal: 1, Fast: 0.6 };
             function fillSelect(select, names, selected) {
                 for (const name of names) select.append(new Option(name, name));
@@ -917,7 +882,6 @@
             fillSelect(tapeSelect, Object.keys(SPEEDS), "Normal");
             fillSelect(twinkleSelect, Object.keys(SPEEDS), "Normal");
 
-            // Background look: ?bg=twinkle (default) or ?bg=none
             document.body.dataset.bg = new URLSearchParams(location.search).get("bg") || "twinkle";
 
             tapeSelect.addEventListener("change", () => {
@@ -926,7 +890,6 @@
             });
             twinkleSelect.addEventListener("change", drawSparkles);
 
-            // A few dots on the grid fade in and out at random, so nothing slides. Dots hidden behind the pane are skipped.
             function drawSparkles() {
                 const sparkles = document.getElementById("sparkles");
                 sparkles.replaceChildren();
@@ -945,7 +908,6 @@
                 }
             }
 
-            // Tooltips: anything with data-tip shows it once the pointer has rested on it for a second.
             const TIP_DELAY = parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--tip-delay")) * 1000;
             const tip = document.getElementById("tip");
             let tipTimer;
@@ -968,7 +930,6 @@
             document.addEventListener("mouseout", (e) => e.relatedTarget || hideTip()); // pointer left the window
             for (const event of ["mousedown", "keydown", "scroll"]) document.addEventListener(event, hideTip, true);
 
-            // What the tape tooltip says about a symbol
             const money = (x) => (x == null ? "n/a" : x.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })); // n/a: the server sent no such field
             const signed = (x) => (x == null ? "n/a" : (x >= 0 ? "+" : "-") + money(Math.abs(x)));
             const compact = (x) => Intl.NumberFormat("en", { notation: "compact", maximumFractionDigits: 1 }).format(x);
@@ -983,7 +944,7 @@
                 ].filter(Boolean).join("\n");
             }
 
-            // A scrolling tape of last prices, green if up on the day and red if down. It shows twice so the loop has no gap.
+            // Items appear twice so the scroll loops without a gap.
             function drawTape(rows) {
                 const note = make("span", "item note", "LAST CLOSE ›");
                 const items = [note].concat(rows.map((row) => {
@@ -997,18 +958,18 @@
                 tape.replaceChildren(track);
             }
 
-            // The purpose block lives here rather than in the header: it is worth reading once, and
-            // as the first message it scrolls away with the conversation instead of costing every
-            // later turn a fixed slice of a phone screen.
             const ABOUT = [
-                ["EXPLORES", "Pair trades across <b>625 US instruments</b> \u2014 the S&P 500 plus 122 " +
-                    "curated ETFs. Name a universe and it fits <b>every combination</b> in it, up to 40 " +
-                    "names, then backtests the best on data they were <b>not</b> chosen on."],
-                ["FOR", "Anyone weighing a pair trade who wants the <b>evidence and its limits</b>, not a " +
-                    "recommendation. Research only \u2014 never advice."],
-                ["HOW TO USE", "Name a <b>sector</b>, an <b>ETF family</b>, or <b>two tickers</b>. Broad " +
-                    "questions fan out to researchers working in parallel; their timeline, charts and " +
-                    "<b>evidence</b> appear with the answer."],
+                ["QUESTION", "Which pairs of US stocks and ETFs <b>track each other, drift apart, then " +
+                    "converge</b>? And when a pair stays apart, does the news explain why?"],
+                ["HOW", "Up to 40 names from <b>625 instruments</b> (the S&amp;P 500 plus 122 ETFs), with " +
+                    "three years of Cboe prices. Every pair is ranked on the <b>first 70%</b> and the best " +
+                    "are backtested on the <b>last 30%</b>, after costs. SEC filings and news explain " +
+                    "long divergences."],
+                ["FOR", "Analysts, finance students and traders who want the <b>evidence and its " +
+                    "limits</b>. Research only, not investment advice."],
+                ["HOW TO USE", "Name a <b>sector</b>, an <b>ETF family</b> or <b>two tickers</b>. One pair " +
+                    "takes about 10\u201340s; a broad question fans out to parallel researchers and " +
+                    "takes about two minutes."],
             ];
 
             function showIntro() {
@@ -1016,7 +977,7 @@
 
                 const about = make("details", "intro-about");
                 about.open = true;
-                about.append(make("summary", "intro-title", "WHAT THIS IS"));
+                about.append(make("summary", "intro-title", "OVERVIEW"));
                 for (const [term, html] of ABOUT) {
                     const row = make("div", "intro-row");
                     row.append(make("span", "intro-dt", term));
@@ -1031,8 +992,6 @@
                     "Please select an example from one of the corresponding categories. Hover over an " +
                     "example to see the expected agent orchestration and tool calls."));
 
-                // Every category stays visible; opening one closes the rest, so the list is never
-                // more than a few lines but nothing is hidden behind a dropdown.
                 const groups = [];
                 const syncing = { on: false };
                 EXAMPLE_GROUPS.forEach(([label, items], i) => {
@@ -1044,16 +1003,12 @@
                     const list = make("div", "intro-items");
                     block.append(list);
                     for (const [query, tags, blurb] of items) {
-                        // One sentence, then the tags as bullets. They were a visible row under
-                        // every example, which was a lot of chrome for something you read once.
                         const button = make("button", "", query);
                         button.setAttribute("data-tip", blurb + "\n" + tags.map((x) => "\u2022 " + x).join("\n"));
                         button.addEventListener("click", () => send(query));
                         list.append(button);
                     }
-                    // Opening one closes the rest. Guarded because setting `open` fires `toggle`
-                    // again on each sibling, which re-entered this handler and made the whole set
-                    // flicker. The summary's own click is suppressed while re-entrant.
+                    // Guarded: setting `open` on a sibling fires `toggle` again and would re-enter.
                     block.addEventListener("toggle", () => {
                         if (!block.open || syncing.on) return;
                         syncing.on = true;
@@ -1067,26 +1022,19 @@
                 messages.replaceChildren(intro);
             }
 
-            // Signed numbers like +3.95%, -$7.05 or −2: green if +, red if -. Not dates (2026-10-05), ranges (10-20%) or ±.
+            // Signed numbers (+3.95%, -$7.05, −2), but not dates, ranges (10-20%) or ±.
             const SIGNED = /((?<![\w.])[+\-−]\$?\d[\d,]*(?:\.\d+)?%?)/;
 
             function colorize(node, text) {
                 text.split(SIGNED).forEach((part, i) => node.append(i % 2 ? make("span", part[0] === "+" ? "up" : "down", part) : part));
             }
 
-            // Show **bold** and colour signed numbers; drop *italic* markers and turn "* " bullets into "• ".
-            // The writer's answer ends with an "**Evidence**" list, one line per finding id. Those
-            // lines are pulled out here so each inline [F1.2.1] can carry its finding as a tooltip
-            // and the list itself can sit collapsed: the citation stays checkable without the
-            // evidence taking more room than the answer. The list is kept rather than replaced,
-            // because a reader skimming without a mouse must still be able to see what was cited.
+            // Split off the **Evidence** list so each [F1.2.1] can show its finding.
             function splitEvidence(text) {
                 const at = text.search(/\n\s*\*\*Evidence\*\*\s*\n/);
                 if (at < 0) return [text, []];
                 const body = text.slice(0, at);
-                // Two shapes reach this: "[F1.1.1] PAIR metric = value (via tool)" from the research
-                // path, and "tool(args) - source" from the analyst's. Both are evidence; only the
-                // first carries ids, so filtering on ids would have shown the analyst nothing.
+                // The analyst's evidence lines carry no [F..] id, so do not filter on ids.
                 const items = text
                     .slice(at)
                     .split("\n")
@@ -1146,12 +1094,6 @@
                 return message;
             }
 
-            // One panel per run: every tool call drawn to scale on a shared clock, each row
-            // expandable into the call itself. The Lead reports a single `research` call however
-            // many researchers it started, so without the per-researcher rows and their timestamps
-            // there would be nothing to show that four ran at once rather than one after another.
-            // Folding the calls in here also keeps a twenty-step fan-out to one block instead of
-            // twenty stacked rows burying the answer.
             const AGENT_CLASS = [
                 [/^Clarifier$/, "ag-clarifier"],
                 [/^Lead$/, "ag-lead"],
@@ -1160,8 +1102,7 @@
                 [/^Analyst$/, "ag-analyst"],
             ];
 
-            // "Researcher 2: Screen the nasdaq_leveraged ETF family for..." -> "Researcher 2".
-            // The brief is still there as a tooltip; it just stops being the visible label.
+            // "Researcher 2: Screen ..." -> "Researcher 2"; the brief stays in the tooltip.
             function shortAgent(name) {
                 return String(name || "tool").split(":")[0].trim();
             }
@@ -1171,44 +1112,35 @@
                 return hit ? hit[1] : "";
             }
 
-            // A run is a tree, not a list: an agent, and under it the calls that agent made. The
-            // flat version labelled every row "<agent> / <tool>", so truncation hid the tool name and
-            // six different calls by one researcher read as the same row repeated.
-            // SPAN rows are recorded by Python for steps the SDK cannot see: an agent with no tools
-            // (the Clarifier, the Writer) and each researcher inside the fan-out. They give an agent
-            // its own start and end.
+            // SPAN rows: steps the SDK cannot see (tool-less agents, researchers).
             const SPAN_ROW = { researcher: 1, clarify: 1, writer: 1, agent: 1 };
 
-            // A tool call that starts other agents, and which agents it starts. This is what turns a
-            // list of calls back into the desk's actual shape: the Lead's `research` call is the
-            // parent of every researcher that ran inside it, and `write_report` is the Writer's.
-            const SPAWNS = [["research", /^Researcher/], ["write_report", /^Writer$/]];
+            // Tool calls that start agents, and which agents they start.
+            const SPAWNS = [["research", /^Researcher/]];
 
             function addRunPanel(model, calls, before) {
                 const box = make("div", "runpanel");
                 const researchers = calls.filter((c) => c.name === "researcher");
 
                 const head = make("div", "rp-head");
-                // Tool calls only: the span rows are agents, and counting them as "steps" beside
-                // "3 researchers in parallel" read as a tool-call count that was five too high.
+                // Tool calls only: span rows are agents, not steps.
                 const toolCalls = calls.filter((c) => !SPAN_ROW[c.name]).length;
                 head.append(make("span", "", "RUN TIMELINE"),
-                            make("span", "rp-note", model + " \u00b7 " + toolCalls + " tool calls"));
-                // Per round, not pooled. Two rounds of two were reported as "4 researchers in
-                // parallel" over an envelope that includes the gap between them - four were never
-                // concurrent, and this is the one sentence here that claims a fact about
-                // concurrency, so it has to be the truth.
+                            make("span", "rp-note", model + " \u00b7 " + toolCalls + (toolCalls === 1 ? " tool call" : " tool calls")));
+                // Per round, not pooled: researchers in different rounds were never concurrent.
                 const rounds = calls.filter((c) => c.name === "research");
+                // By name: a researcher that stalled has two rows, its failed run and its write-up.
+                const agentsIn = (set) => new Set(set.map((c) => c.agent)).size;
                 const wide = rounds
                     .map((r) => researchers.filter((c) => c.started_at >= r.started_at - 0.05 &&
                                                           c.ended_at <= r.ended_at + 0.05))
-                    .filter((set) => set.length > 1);
-                const best = wide.sort((a, b) => b.length - a.length)[0];
+                    .filter((set) => agentsIn(set) > 1);
+                const best = wide.sort((a, b) => agentsIn(b) - agentsIn(a))[0];
                 if (best) {
                     const work = best.reduce((n, c) => n + (c.ended_at - c.started_at), 0);
                     const span = Math.max(...best.map((c) => c.ended_at)) - Math.min(...best.map((c) => c.started_at));
                     head.append(make("span", "rp-note",
-                        best.length + " researchers in parallel \u00b7 " + work.toFixed(1) + "s of work in " +
+                        agentsIn(best) + " researchers in parallel \u00b7 " + work.toFixed(1) + "s of work in " +
                         span.toFixed(1) + "s (" + (work / Math.max(span, 0.001)).toFixed(1) + "x)" +
                         (wide.length > 1 ? " \u00b7 " + wide.length + " rounds" : "")));
                 }
@@ -1217,10 +1149,7 @@
                 const ordered = [...calls].sort((a, b) => (a.started_at || 0) - (b.started_at || 0));
                 const num = (v) => (typeof v === "number" && isFinite(v) ? v : 0);
 
-                // One group per SPAN row, not per agent name. research.py restarts researcher
-                // numbering every round, so two rounds can produce the same label - keyed by name,
-                // the second round overwrote the first and its tool calls were drawn under the
-                // wrong parent. A group is an agent *occurrence*.
+                // One group per SPAN row, not per name: researcher numbering restarts every round.
                 const groups = [];
                 for (const call of ordered) {
                     if (!SPAN_ROW[call.name]) continue;
@@ -1244,8 +1173,7 @@
                 }
                 for (const g of groups) if (!isFinite(g.from)) { g.from = 0; g.to = 0; }
 
-                // Attach each spawned agent to the call that started it, matched on time containment
-                // so a second round's researchers go under that round's `research` call.
+                // By time containment. The Writer is not nested: it runs after the Lead's run ends.
                 const kidsOf = new Map();
                 const nested = new Set();
                 for (const g of groups) {
@@ -1264,10 +1192,7 @@
                 const t1 = timed.length ? Math.max(...timed.map((c) => c.ended_at)) : 1;
                 const width = Math.max(t1 - t0, 0.001);
 
-                // Shades follow the researcher's number, not the order the server happened to
-                // return them in: concurrent researchers share a start time to the millisecond, so
-                // first-appearance order is completion order and "Researcher 2" changed colour
-                // between runs. Keyed by short name so both rounds of a re-run agree.
+                // Shade by number: concurrent researchers share a start time.
                 const shade = new Map();
                 const researcherNames = [...new Set(groups.filter((g) => /^Researcher/.test(g.who))
                                                           .map((g) => shortAgent(g.who)))]
@@ -1277,8 +1202,7 @@
 
                 const legend = make("div", "rp-legend");
                 const seen = new Set();
-                // Chronological, so the legend reads in the order the rows below it do. Ties go to
-                // the agent number, because concurrent researchers share a start time.
+                // Chronological to match the rows; ties go to the agent number.
                 const legendOrder = [...groups].sort((a, b) => a.from - b.from || agentRank(a.who) - agentRank(b.who));
                 for (const g of legendOrder) {
                     const label = shortAgent(g.who);
@@ -1289,15 +1213,18 @@
                     tag.setAttribute("data-tip", g.who);
                     legend.append(tag);
                 }
+                if (calls.some((c) => c.error)) {
+                    const tag = make("span", "rp-key");
+                    tag.append(make("span", "rp-dot rp-failed"), "failed");
+                    tag.setAttribute("data-tip", "A step that failed. A retry, if there was one, follows it in the agent's colour.");
+                    legend.append(tag);
+                }
                 box.append(legend);
 
                 function bar(cls, from, to) {
                     const track = make("div", "rp-track");
                     const el = make("div", "rp-bar " + cls);
-                    // Clamped at both ends. Without the upper bound, a span longer than the run
-                    // (only possible from a malformed payload) made `100 - w` negative, and that
-                    // negative became the left offset - the bar then ran across the name and
-                    // duration columns and off the panel.
+                    // Clamped at both ends so a malformed span cannot push the bar off the track.
                     const w = Math.min(Math.max(((num(to) - num(from)) / width) * 100, 0.6), 100);
                     const left = Math.min(Math.max(((num(from) - t0) / width) * 100, 0), 100 - w);
                     el.style.left = left + "%";
@@ -1306,9 +1233,7 @@
                     return track;
                 }
 
-                // "Researcher 2" before "Researcher 10", and before anything unnumbered. Three
-                // researchers start within milliseconds of each other, so sorting by start time
-                // reordered the list from one run to the next.
+                // By number: concurrent researchers start within ms of each other.
                 function byAgentOrder(a, b) {
                     return agentRank(a.who) - agentRank(b.who) || a.from - b.from;
                 }
@@ -1318,7 +1243,6 @@
                     return node;
                 }
 
-                // Ticks on the same grid as the bars, so a label sits above what it measures.
                 function axis() {
                     const row = make("div", "rp-axis");
                     row.append(make("div"));
@@ -1334,30 +1258,25 @@
                     return row;
                 }
 
-                // One tool call, plus any agents it started underneath it.
                 function renderCall(call, cls, depth) {
                     const row = make("details", "rp-row");
                     const summary = make("summary");
-                    // Tool first: it is what distinguishes one row from the next, and what survives
-                    // when the column is narrow.
                     const name = make("div", "rp-name rp-is-tool " + cls);
                     name.append(make("span", "rp-tool", call.name));
+                    if (call.error) name.append(make("span", "rp-count rp-err", "failed: " + call.error));
                     const spawned = kidsOf.get(call) || [];
                     if (spawned.length) name.append(make("span", "rp-count", "\u2192 " + spawned.length + " agent" + (spawned.length === 1 ? "" : "s")));
                     indent(name, depth);
-                    summary.append(name, bar(cls, call.started_at || 0, call.ended_at || 0),
+                    summary.append(name,
+                                   bar(cls + (call.error ? " rp-failed" : ""), call.started_at || 0, call.ended_at || 0),
                                    make("div", "rp-dur", ((call.ended_at || 0) - (call.started_at || 0)).toFixed(1) + "s"));
                     row.append(summary);
 
-                    // Agents this call started come FIRST: they are what the open state is for.
-                    // Appended after the JSON dump they started 318px below the row, behind a
-                    // scrollable box, which is where the fan-out went to hide.
+                    // Spawned agents go above the JSON dump, visible when it opens.
                     for (const kid of spawned.slice().sort(byAgentOrder)) row.append(renderAgent(kid, depth + 1));
 
                     let result;
-                    // JSON.parse("null") returns null without throwing, and reading .sql off it
-                    // throws out of addRunPanel - past addCharts and renderText - so one null
-                    // result cost the user the whole answer the server had already produced.
+                    // `|| {}`: JSON.parse("null") is null and .sql would throw.
                     try { result = JSON.parse(call.result) || {}; } catch (e) { result = { result: call.result }; }
                     if (typeof result !== "object") result = { result };
                     const sql = (call.args && call.args.sql) || result.sql || result.universe_sql;
@@ -1369,9 +1288,7 @@
                     }
                     const dump = indent(make("pre", "", JSON.stringify({ args: call.args, result }, null, 2)), depth);
                     if (spawned.length) {
-                        // This row opens so the agents it started are visible, but the raw payload
-                        // should not ride along: a `research` call's dump is several thousand
-                        // characters and it was the first thing under the row.
+                        // Open for the spawned agents; the large payload gets its own toggle.
                         const raw = make("details", "rp-raw");
                         raw.append(make("summary", "", "raw call and result"));
                         raw.append(dump);
@@ -1383,22 +1300,25 @@
                     return row;
                 }
 
-                // One agent, plus the calls it made.
                 function renderAgent(g, depth) {
                     const cls = classOf(g.who);
                     const group = make("details", "rp-group");
                     const top = make("summary");
                     const name = make("div", "rp-name rp-is-agent " + cls);
                     name.append(make("span", "rp-dot " + cls), make("span", "rp-agent", shortAgent(g.who)));
-                    name.append(make("span", "rp-count",
+                    const failed = g.span && g.span.error;
+                    const retry = g.span && g.span.args && g.span.args.retry;
+                    // A failed or retry row shows its status instead of "no tool calls", or it is cut off.
+                    if (g.kids.length || !(failed || retry)) name.append(make("span", "rp-count",
                         g.kids.length ? g.kids.length + (g.kids.length === 1 ? " call" : " calls") : "no tool calls"));
+                    if (failed) name.append(make("span", "rp-count rp-err", "failed: " + g.span.error));
+                    else if (retry) name.append(make("span", "rp-count", "retry" + (g.span.args.model ? " on " + String(g.span.args.model).replace(/^Gemini /, "") : "")));
                     if (g.span) name.setAttribute("data-tip", g.who + "\n\n" + g.span.result);
                     indent(name, depth);
-                    top.append(name, bar(cls, g.from, g.to), make("div", "rp-dur", (g.to - g.from).toFixed(1) + "s"));
+                    top.append(name, bar(cls + (failed ? " rp-failed" : ""), g.from, g.to),
+                               make("div", "rp-dur", (g.to - g.from).toFixed(1) + "s"));
                     group.append(top);
                     for (const call of g.kids) group.append(renderCall(call, cls, depth + 1));
-                    // Collapsed by default so a 16-step run is six lines, but an agent that started
-                    // other agents stays open: hiding the fan-out is hiding the whole point.
                     group.open = g.kids.some((c) => (kidsOf.get(c) || []).length > 0);
                     if (!g.kids.length) group.classList.add("rp-leaf");
                     return group;
@@ -1410,19 +1330,13 @@
             }
 
 
-            // Charts come back in their own field, not inside a tool result, so the model never
-            // carries a figure in its context. Each is a Plotly spec built in chart.py.
-            // Three researchers screening three universes returned three full-width tables, which
-            // pushed the answer off the screen. Several charts become one pane with a tab per
-            // author; a single chart is left exactly as it was.
+            // Each chart is a Plotly spec from pipeline/chart.py, sent outside the tool results.
             function addCharts(charts, before) {
                 if (!charts.length) return;
                 addChartTabs(charts, before);
             }
 
-            // What kind of figure this is, so tables are not tabbed against line charts. A reader
-            // comparing three screens wants them side by side; a z-score panel is a different
-            // question and belongs under its own heading.
+            // Group by figure kind so tables are never tabbed against line charts.
             function chartKind(figure) {
                 const types = new Set((figure.data || []).map((d) => d.type));
                 if (types.has("table")) return "SCREEN RESULTS";
@@ -1450,6 +1364,9 @@
                     const box = make("div", "chart-tabs");
                     box.append(make("div", "chart-kind", kind + "  \u00b7  " + items.length));
                     const bar = make("div", "chart-tabbar");
+                    box.append(bar);
+                    // In the document before drawing: Plotly measures text to wrap table cells.
+                    messages.insertBefore(box, before);
                     const panes = [];
                     items.forEach(({ symbol, figure, agent }, i) => {
                         const who = agent ? shortAgent(agent) : symbol || "chart " + (i + 1);
@@ -1457,6 +1374,7 @@
                         tab.append(make("span", "rp-dot " + (agentClass(who) || "ag-r1")), who);
                         tab.setAttribute("data-tip", (agent || who) + "\n" + (symbol || ""));
                         const pane = make("div", "chart-pane" + (i ? "" : " on"));
+                        box.append(pane);
                         drawInto(pane, symbol, figure);
                         tab.addEventListener("click", () => {
                             bar.querySelectorAll(".chart-tab").forEach((b) => b.classList.remove("on"));
@@ -1470,9 +1388,6 @@
                         bar.append(tab);
                         panes.push(pane);
                     });
-                    box.append(bar);
-                    panes.forEach((pn) => box.append(pn));
-                    messages.insertBefore(box, before);
                 }
             }
 
@@ -1482,6 +1397,8 @@
                     node.setAttribute("role", "img");
                     node.setAttribute("aria-label", symbol + " chart");
                     parent.append(node);
+                    const meta = (figure.layout || {}).meta || {};
+                    if (meta.note) parent.append(make("div", "chart-caption", meta.note));
                     Plotly.newPlot(node, figure.data, figure.layout, PLOTLY_CONFIG)
                         .then(() => { reportRange(node); watchSize(node); })
                         .catch(() => (node.textContent = symbol + " chart failed to render"));
@@ -1494,6 +1411,7 @@
                 for (const { symbol, figure, agent } of charts) {
                     const holder = make("div", "chart-solo");
                     if (kind) holder.append(make("div", "chart-kind", kind));
+                    messages.insertBefore(holder, before);
                     drawInto(holder, symbol, figure);
                     if (agent) {
                         const by = make("div", "chart-by");
@@ -1502,14 +1420,10 @@
                         by.setAttribute("data-tip", agent);
                         holder.append(by);
                     }
-                    messages.insertBefore(holder, before);
                 }
             }
 
-            // Plotly's responsive mode only listens for WINDOW resizes, so a chart whose container
-            // changes for any other reason (a reflow, the pane growing) keeps its old size. Watch
-            // the element itself, and pick a height from its width so it stays readable on a phone
-            // and uses the space on a desktop. Tables size themselves in chart.py, so leave those.
+            // Plotly only hears window resizes, so watch the element; tables size themselves.
             function watchSize(node) {
                 const isTable = (node.data || []).some((d) => d.type === "table");
                 if (isTable) return;
@@ -1518,15 +1432,12 @@
                     const width = node.clientWidth;
                     if (!width || Math.abs(width - last) < 8) return; // ignore sub-pixel churn
                     last = width;
-                    // Taller relative to width when narrow, so a phone still shows a usable plot.
                     const height = Math.round(Math.min(360, Math.max(200, width * (width < 480 ? 0.78 : 0.46))));
                     Plotly.relayout(node, { height, width: null }).catch(() => observer.disconnect());
                 });
                 observer.observe(node);
             }
 
-            // Plotly's own chrome, trimmed to what is useful here: drag to zoom, double-click to
-            // reset, and a PNG download. The rest of the mode bar is noise for a price chart.
             const PLOTLY_CONFIG = {
                 responsive: true,
                 displaylogo: false,
@@ -1534,8 +1445,6 @@
                 toImageButtonOptions: { filename: "converge-chart", scale: 2 },
             };
 
-            // Zooming an x-range is how you ask "what happened between these two dates?", so answer
-            // it: report the move across whatever window is on screen.
             function reportRange(node) {
                 const trace = (node.data || []).find((d) => d.type !== "table" && d.y && d.y.length > 1);
                 if (!trace) return;
@@ -1544,24 +1453,27 @@
                 const update = (range) => {
                     let lo = 0, hi = trace.y.length - 1;
                     if (range) {
-                        // A string compare is safe here: both sides are ISO date strings, and
-                        // Plotly reports a date-axis range as "YYYY-MM-DD[ HH:MM...]".
+                        // String compare is safe: both sides are ISO date strings.
                         const within = trace.x.map((x, i) => [x, i]).filter(([x]) => x >= range[0] && x <= range[1]);
                         if (within.length > 1) {
                             lo = within[0][1];
                             hi = within[within.length - 1][1];
                         } else {
-                            // Fewer than two points in view: say so rather than quietly falling
-                            // back to the whole series, which would report the wrong return.
+                            // Under two points: say so rather than report the whole series' return.
                             note.replaceChildren(make("b", "", "SELECTED"), "too narrow to measure");
                             return;
                         }
                     }
                     const from = trace.y[lo], to = trace.y[hi];
+                    // A z-score crosses zero, so a percentage change of it means nothing.
+                    if (((node.layout || {}).meta || {}).kind === "zscore") {
+                        note.replaceChildren(make("b", "", "SELECTED"), trace.x[lo] + " \u2192 " + trace.x[hi] +
+                                             "  z " + from.toFixed(2) + " \u2192 " + to.toFixed(2));
+                        return;
+                    }
                     if (!from) return;
                     const pct = (to / from - 1) * 100;
-                    // Endpoints come from the thinned series the chart plots, so on a multi-year
-                    // range they can sit a few sessions either side of the exact drag.
+                    // Endpoints come from the thinned series, a few sessions off the drag.
                     note.replaceChildren(make("b", "", "SELECTED"), trace.x[lo] + " \u2192 " + trace.x[hi] + "  ");
                     colorize(note, (pct >= 0 ? "+" : "") + pct.toFixed(2) + "%");
                 };
@@ -1573,9 +1485,7 @@
                 });
             }
 
-            // The in-flight run, so it can be stopped: by the STOP button, or by starting a new
-            // session. Without this, newSession() left sendBtn disabled forever and every example
-            // button silently did nothing.
+            // The in-flight run, so STOP or a new session can abort it.
             let inflight = null;
 
             function setRunning(on) {
@@ -1601,21 +1511,17 @@
                 setRunning(true);
                 remember(text);
                 if (messages.querySelector(".intro")) messages.replaceChildren();
-                // The panel has served its purpose once a question is asked, and it is long.
                 addMessage("user", text);
                 const loading = addMessage("assistant", "Working...", true);
                 const content = loading.querySelector(".content");
                 const model = modelSelect.value; // what this question is sent with
 
-                // The page cannot know how far along a run is until /chat returns, so an honest
-                // elapsed count beats a fake progress bar. The estimate is deliberately generous:
-                // a measured research question lands around 20-40s, and a reader who is told "a
-                // minute" and waits 25s is pleased, where the reverse reads as a hang.
+                // Elapsed time, not a fake progress bar; past 40s is beyond the fast path.
                 const startedAt = Date.now();
                 const ticker = setInterval(() => {
                     const secs = Math.round((Date.now() - startedAt) / 1000);
                     content.textContent = "Working... " + secs + "s" +
-                        (secs > 10 ? "  (research fans out; about a minute)" : "");
+                        (secs > 40 ? "  (research fans out; about two minutes)" : "");
                 }, 1000);
 
                 try {
@@ -1655,8 +1561,7 @@
                 userInput.focus();
             }
 
-            // Shell-style history: Up walks back through what was sent, Down returns to the draft.
-            // `draft` holds whatever was half-typed, so walking the history never loses it.
+            // Shell-style history: Up walks back, Down returns to the half-typed draft.
             const history = [];
             let historyAt = -1;
             let draft = "";
@@ -1682,7 +1587,6 @@
                 } else {
                     userInput.value = history[historyAt];
                 }
-                // Put the caret at the end rather than wherever it happened to be.
                 requestAnimationFrame(() => userInput.setSelectionRange(userInput.value.length, userInput.value.length));
             }
 

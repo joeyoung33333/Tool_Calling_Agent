@@ -1,14 +1,6 @@
-"""Plotly figure specs, themed to match the terminal.
+"""Plotly figure specs, themed to match the terminal; the page passes them to Plotly.newPlot().
 
-Each function returns `{"data": [...], "layout": {...}}`, which the page hands straight to
-`Plotly.newPlot()`. Nothing here renders pixels: the charts stay interactive, and only data crosses
-the wire, so the model never carries an image.
-
-The palette is duplicated from index.html's `:root` block, so a theme change is two edits. Keeping
-them separate saves the page a fetch before it can draw.
-
-Raises `ValueError` on bad input: these are caller bugs, not the model-facing `DataError`s that
-`sources/data.py` raises, because nothing a model types reaches here.
+Palette duplicated from index.html's `:root`. Raises ValueError on bad input (caller bugs).
 """
 
 import plotly.graph_objects as go
@@ -21,7 +13,7 @@ PANEL = "#0d0900"  # --panel: the plotting area and table header, as on tool-cal
 MONO = 'ui-monospace, "SF Mono", Menlo, Consolas, monospace'
 
 _TEXT = {"color": MUTED, "family": MONO, "size": 11}
-# Plotly sets the mode bar background inline, so page CSS cannot reach it; its theme comes from here.
+# Plotly sets the mode bar background inline, so page CSS cannot reach it.
 MODEBAR = {"bgcolor": "rgba(0,0,0,0)", "color": "#9c6b00", "activecolor": AMBER}
 HOVER = {
     "hovermode": "x unified",
@@ -37,34 +29,26 @@ def axis(label: str = "") -> dict:
         "linecolor": LINE,
         "tickfont": _TEXT,
         "title": {"text": label, "font": _TEXT},
-        "automargin": True,  # size the gutter from the labels drawn, so a narrow screen keeps its width
+        "automargin": True,
     }
 
 
 def _layout(title: str = "", height: int = 320, margin: dict | None = None, **extra) -> dict:
-    """The shared terminal look, plus whatever the caller adds in `extra`.
-
-    `extra` must stay in the returned dict and merge last. Dropping it costs every chart its themed
-    axes and hover, and the z-score panel the bands that are the only reason to look at it.
-    """
+    """The shared terminal look; `extra` must merge last or charts lose their axes and bands."""
     return {
         "title": {
             "text": title,
             "font": {"color": AMBER, "family": MONO, "size": 13},
-            # Anchored to the container's top edge with explicit padding. Left to position itself,
-            # Plotly puts the title's top flush against that edge and the first row of pixels is
-            # clipped by the rounded border; `automargin` grows the gutter but cannot add padding
-            # above the text itself.
+            # Anchored with explicit padding, or the title's top row is clipped by the border.
             "xref": "container", "x": 0.012, "xanchor": "left",
             "yref": "container", "y": 1.0, "yanchor": "top",
             "pad": {"t": 12, "l": 2},
             "automargin": True,
         },
         "height": height,
-        # 34px clipped a two-line title on a narrow screen. `automargin` grows the gutter but
-        # cannot shrink a margin we set too small to begin with.
+        # `automargin` cannot shrink a margin set too small to begin with.
         "margin": margin or {"l": 12, "r": 12, "t": 44 if title else 10, "b": 12},
-        "paper_bgcolor": "rgba(0,0,0,0)",  # the page's own backdrop shows through
+        "paper_bgcolor": "rgba(0,0,0,0)",
         "plot_bgcolor": PANEL,
         "font": _TEXT,
         "showlegend": False,
@@ -74,10 +58,7 @@ def _layout(title: str = "", height: int = 320, margin: dict | None = None, **ex
 
 
 def line(label: str, points: list[tuple[str, float]], title: str = "", y_label: str = "") -> dict:
-    """A line chart of one named series: `points` is (x label, y value), left to right.
-
-    x labels are used as given, so this charts a date series or any other ordered one.
-    """
+    """A line chart of one named series: `points` is (x label, y value), left to right."""
     if len(points) < 2:
         raise ValueError("a line chart needs at least 2 points")
     trace = go.Scatter(
@@ -92,28 +73,37 @@ def line(label: str, points: list[tuple[str, float]], title: str = "", y_label: 
         title,
         xaxis=axis(),
         yaxis=axis(y_label),
-        dragmode="zoom",  # drag selects an x-range; the page reports the move across it
+        dragmode="zoom",  # the page reports the move across a dragged x-range
         **HOVER,
     )}
 
 
-def table(headers: list[str], rows: list[list], title: str = "") -> dict:
-    """A table, themed like the rest of the terminal.
-
-    `rows` is row-major, as a reader would write it; Plotly wants columns, so it is transposed here
-    rather than at every call site.
+def table(headers: list[str], rows: list[list], title: str = "",
+          groups: list[tuple[str, int]] | None = None, note: str = "",
+          subtitles: list[str] | None = None) -> dict:
+    """A table from row-major `rows`: `groups` label column runs above the header, `subtitles`
+    print under each column name, and `note` is a caption.
     """
     if not headers:
         raise ValueError("a table needs at least one column")
+    if groups and sum(n for _, n in groups) != len(headers):
+        raise ValueError("table groups must cover every column exactly once")
+    if subtitles and len(subtitles) != len(headers):
+        raise ValueError("a table needs one subtitle per column")
+    subs = subtitles or [""] * len(headers)
     columns = [[row[i] if i < len(row) else "" for row in rows] for i in range(len(headers))]
+    # Estimated pixel widths (6.6 per character plus padding), so no cell wraps past the height.
+    widths = [round(max(len(h), len(s) * 0.82, *(len(str(v)) for v in col)) * 6.6 + 16)
+              for h, s, col in zip(headers, subs, columns)]
     trace = go.Table(
         header={
-            "values": [f"<b>{h}</b>" for h in headers],
+            "values": [f"<b>{h}</b>" + (f"<br><span style='font-size:9px;color:{DIM}'>{s}</span>" if s else "")
+                       for h, s in zip(headers, subs)],
             "fill_color": PANEL,
             "line_color": LINE,
             "align": "left",
             "font": {"color": AMBER, "family": MONO, "size": 11},
-            "height": 26,
+            "height": 40 if subtitles else 26,
         },
         cells={
             "values": columns,
@@ -123,13 +113,32 @@ def table(headers: list[str], rows: list[list], title: str = "") -> dict:
             "font": {"color": MUTED, "family": MONO, "size": 11},
             "height": 24,
         },
+        columnwidth=widths,
     ).to_plotly_json()
-    # Cells get height - margin.t - margin.b - header. Miscount any term and the last row is cut
-    # off with no visible scrollbar, so the height is computed rather than guessed.
-    margin = {"l": 8, "r": 8, "t": 44 if title else 8, "b": 8}  # matches the title padding in _layout
-    header, row, slack = 30, 24, 8  # a bold header grows past 26 once Plotly measures the markup
-    auto = margin["t"] + margin["b"] + header + row * max(len(rows), 1) + slack
-    return {"data": [trace], "layout": _layout(title, min(auto, 520), margin)}
+    # Height is computed: miscount any term and the last row is cut off with no scrollbar.
+    bar = 24 if groups else 0
+    margin = {"l": 8, "r": 8, "t": (44 if title else 8) + bar, "b": 8}  # matches _layout's title pad
+    # A bold header grows past its set height once Plotly measures the markup.
+    header, row, slack = (44 if subtitles else 30), 24, 8
+    height = min(margin["t"] + margin["b"] + header + row * max(len(rows), 1) + slack, 520)
+    extra = _group_bar(groups, widths, bar / (height - margin["t"] - margin["b"])) if groups else {}
+    if note:
+        extra["meta"] = {"note": note}
+    return {"data": [trace], "layout": _layout(title, height, margin, **extra)}
+
+
+def _group_bar(groups: list[tuple[str, int]], widths: list[int], depth: float) -> dict:
+    """Labelled boxes above the header, in paper units: `depth` is the bar's height."""
+    shapes, labels, start, total = [], [], 0, sum(widths)
+    for label, n in groups:
+        x0, x1 = sum(widths[:start]) / total, sum(widths[:start + n]) / total
+        shapes.append({"type": "rect", "xref": "paper", "yref": "paper", "x0": x0, "x1": x1,
+                       "y0": 1, "y1": 1 + depth, "fillcolor": PANEL, "line": {"color": LINE, "width": 1}})
+        labels.append({"xref": "paper", "yref": "paper", "x": (x0 + x1) / 2, "y": 1 + depth / 2,
+                       "text": f"<b>{label}</b>", "showarrow": False, "xanchor": "center",
+                       "yanchor": "middle", "font": {"color": DIM, "family": MONO, "size": 10}})
+        start += n
+    return {"shapes": shapes, "annotations": labels}
 
 
 def zscore_panel(
@@ -139,12 +148,9 @@ def zscore_panel(
     title: str = "",
     episodes: list[dict] | None = None,
     height: int = 340,
+    note: str = "",
 ) -> dict:
-    """The spread's z-score over time, with the entry and exit bands drawn on it.
-
-    The chart that makes a pair trade legible: the bands show where a trade opens and closes, and
-    the shaded runs mark divergences that stayed wide long enough to need explaining.
-    """
+    """The spread's z-score over time, with entry/exit bands and shaded divergence episodes."""
     if len(points) < 2:
         raise ValueError("a z-score panel needs at least 2 points")
     x = [d for d, _ in points]
@@ -153,7 +159,7 @@ def zscore_panel(
         line={"color": AMBER, "width": 1.6}, hovertemplate="z = %{y:.2f}<extra></extra>",
     ).to_plotly_json()
 
-    # Horizontal bands rather than extra traces, so the legend stays empty and hover stays clean.
+    # Shapes rather than traces, so the legend stays empty and hover stays clean.
     lines = []
     for level, colour, dash in [(entry_z, DIM, "dash"), (-entry_z, DIM, "dash"),
                                 (exit_z, LINE, "dot"), (-exit_z, LINE, "dot"), (0, MUTED, "solid")]:
@@ -164,5 +170,6 @@ def zscore_panel(
                       "x0": episode["start"], "x1": episode["end"], "y0": 0, "y1": 1,
                       "fillcolor": DIM, "opacity": 0.14, "line": {"width": 0}, "layer": "below"})
 
-    layout = _layout(title, height, xaxis=axis(), yaxis=axis("z-score"), shapes=lines, **HOVER)
+    layout = _layout(title, height, xaxis=axis(), yaxis=axis("z-score"), shapes=lines, **HOVER,
+                     meta={"kind": "zscore", "note": note})
     return {"data": [trace], "layout": layout}

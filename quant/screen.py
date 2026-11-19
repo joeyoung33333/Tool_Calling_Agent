@@ -1,14 +1,6 @@
 """Screen every pair in a universe, then rank them. The model never chooses a pair.
 
-An agent decides *what to look at* - a sector, an ETF family, a hunch - and interprets what comes
-back. Everything between those two points happens here, in Python, over every combination:
-
-    n symbols  ->  n price fetches  ->  C(n,2) pair fits  ->  rank  ->  top K backtested
-
-Fetching is linear and slow, so each series is pulled once and reused; pair arithmetic is quadratic
-but nearly free over cached series. A 40-name universe is 40 fetches and 780 fits. Because the
-ranking is a deterministic function of the statistics, the answer to "why this pair?" is a number
-rather than a sentence a model wrote.
+Each series is fetched once; C(n,2) pair fits run over the cached series, then the top K backtest.
 """
 
 import statistics
@@ -28,8 +20,7 @@ class ScreenError(Exception):
 def fetch_series(symbols: list[str], lookback_days: int) -> tuple[dict[str, list[dict]], list[dict]]:
     """Daily bars for each symbol, fetched once. Returns (series, problems).
 
-    Per symbol, not per pair, since every pair that follows reads these same lists. A failed symbol
-    is reported rather than dropped: a missing leg changes which pairs were considered.
+    A failed symbol is reported, not dropped: a missing leg changes which pairs were considered.
     """
     start = date.today() - timedelta(days=lookback_days)
     series: dict[str, list[dict]] = {}
@@ -60,10 +51,7 @@ def clamp_lookback(days: int | None) -> int:
 def fit_pair(a: str, b: str, series: dict[str, list[dict]], rules: backtest.Rules) -> dict | None:
     """Statistics for one pair, measured on the in-sample window only, or None if incomparable.
 
-    In-sample only is the whole point: screening on the full window would pick the pair using the
-    very sessions the backtest then calls a holdout, so a pair reverting only in the last 30% would
-    be selected *because* of that and then pass its own test. Freezing the parameters is not enough
-    if the selection saw the answer. Orientation is alphabetical, so a pair is screened once.
+    In-sample only, so the pair is not selected using the sessions its backtest calls a holdout.
     """
     dates, closes_a, closes_b = pairs.align(series[a], series[b])
     if len(dates) < config.MIN_OVERLAP_SESSIONS:
@@ -74,8 +62,7 @@ def fit_pair(a: str, b: str, series: dict[str, list[dict]], rules: backtest.Rule
         model = backtest.fit(dates[:cut], closes_a[:cut], closes_b[:cut])
     except (ValueError, statistics.StatisticsError):
         return None
-    # Where the spread sits today, scored against the in-sample fit. summary()'s own last z-score
-    # is months stale, because it was measured over the in-sample slice.
+    # Today's z against the in-sample fit; summary()'s own last z-score is months stale.
     current = (closes_a[-1] - model.beta * closes_b[-1] - model.mean) / model.sd
     return {"a": a, "b": b, **stats, "current_z": round(current, 2), "current_z_as_of": dates[-1],
             "fitted_on_sessions": cut, "holdout_sessions": len(dates) - cut}
@@ -84,8 +71,7 @@ def fit_pair(a: str, b: str, series: dict[str, list[dict]], rules: backtest.Rule
 def rank(candidates: list[dict]) -> list[dict]:
     """Order `candidates` best-first on a weighted average of per-metric ranks.
 
-    Ranks rather than raw values, where a half-life of 2 days or 400 would swamp every other
-    metric. Each candidate gets `rank_score` (0 worst, 1 best) and `rank_detail` to explain it.
+    Adds `rank_score` (0 worst, 1 best) and `rank_detail` to each candidate.
     """
     weights = config.SCREEN_WEIGHTS
     reverting = [c for c in candidates if c.get("tradeable") and _reverts(c)]
@@ -105,7 +91,7 @@ def rank(candidates: list[dict]) -> list[dict]:
         have = [i for i, c in enumerate(reverting) if c.get(metric) is not None]
         have.sort(key=lambda i: reverting[i][metric],
                   reverse=not config.SCREEN_HIGHER_IS_BETTER[metric])
-        # Worst 0, best 1. A sole candidate is the best there is, so it scores 1, not 0.
+        # Worst 0, best 1; a sole candidate scores 1.
         last = len(have) - 1
         scores[metric] = {i: (position / last if last else 1.0) for position, i in enumerate(have)}
 
@@ -114,8 +100,7 @@ def rank(candidates: list[dict]) -> list[dict]:
         for metric, weight in weights.items():
             if weight <= 0:
                 continue
-            # A missing metric scores the middle rather than being dropped. Dropping it would
-            # renormalise over a smaller weight set, making extra data a handicap.
+            # A missing metric scores the middle; dropping it would make extra data a handicap.
             score = scores[metric].get(i, 0.5)
             detail[metric] = round(score, 3)
             total += weight * score
@@ -132,8 +117,7 @@ def screen(
 ) -> dict:
     """Fit every pair in `symbols`, rank them, and backtest the best `top_k`.
 
-    `trials_considered` is counted here, in code, and handed to the deflated Sharpe: the haircut for
-    having searched many pairs cannot be negotiated down by whatever is reading the result.
+    `trials_considered` is counted in code for the deflated Sharpe, so it cannot be negotiated.
     """
     wanted = sorted({s.strip().upper() for s in symbols if s and s.strip()})
     if len(wanted) < 2:
@@ -159,13 +143,14 @@ def screen(
     rejected = [c for c in candidates if not c.get("tradeable")]
     no_reversion = [c for c in candidates if c.get("tradeable") and not _reverts(c)]
 
-    # Only the top K pay for a backtest; the arithmetic above already eliminated the rest.
+    # Ranking used only in-sample data, so the trials to deflate for are just the pairs backtested.
+    chosen = ranked[:k]
     tested = []
-    for candidate in ranked[:k]:
+    for candidate in chosen:
         try:
             result = backtest.evaluate(
                 series[candidate["a"]], series[candidate["b"]], rules=rules,
-                trials=len(candidates),
+                trials=len(chosen),
             )
         except (ValueError, statistics.StatisticsError) as e:
             tested.append({**candidate, "backtest": {"tradeable": False, "reason": str(e)}})
@@ -178,7 +163,7 @@ def screen(
         "pairs_combinations": len(combos),
         "pairs_screened": len(candidates),
         "pairs_skipped_short_history": len(combos) - len(candidates),
-        "trials_considered": len(candidates),
+        "trials_considered": len(chosen),
         "lookback_days": lookback,
         "top_k": k,
         "ranked": tested,
@@ -206,11 +191,7 @@ def screen(
 
 
 def _reverts(candidate: dict) -> bool:
-    """Whether the spread mean-reverts fast enough to be worth trading.
-
-    A missing half-life means no reversion at all; a very long one means the spread wanders and
-    every trade would close on the time stop rather than on the convergence the strategy needs.
-    """
+    """Whether the spread mean-reverts within one maximum hold (no half-life means no reversion)."""
     hl = candidate.get("half_life_days")
     return hl is not None and hl <= config.MAX_HALF_LIFE_DAYS
 

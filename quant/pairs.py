@@ -1,19 +1,6 @@
 """Pair statistics from two price series. Pure Python, no dependencies.
 
-The arithmetic is all in this module because the project rests on the model *not* being the thing
-that decides which pairs are good. An agent chooses the universe and interprets what comes back;
-these functions decide what survives.
-
-Vocabulary, used consistently below:
-
-    hedge ratio (beta)  how many units of B to short per unit of A, from an OLS fit of A on B
-    spread              A - beta*B, the thing that is supposed to be mean-reverting
-    z-score             how many standard deviations the spread sits from its mean
-    half-life           sessions for a divergence to decay halfway back, from an AR(1) fit
-    crossings           how often the spread actually returns through its mean
-
-A pair is interesting when the spread mean-reverts *and* the hedge ratio is stable. Correlation
-alone is not enough: two names can be 0.95 correlated while their spread trends away forever.
+This arithmetic, not the model, decides which pairs survive.
 """
 
 import math
@@ -22,8 +9,7 @@ import statistics
 TRADING_DAYS = 252
 FLAT = 1e-12  # a deviation below this is rounding noise, not variation
 
-# A tradeable hedge ratio must be positive, or the spread holds both legs long and carries full
-# market exposure. The bounds also reject ratios so lopsided that one leg barely participates.
+# A tradeable hedge ratio must be positive (else both legs are long) and not too lopsided.
 MIN_HEDGE_RATIO = 0.05
 MAX_HEDGE_RATIO = 20.0
 
@@ -31,8 +17,7 @@ MAX_HEDGE_RATIO = 20.0
 def align_bars(a: list[dict], b: list[dict]) -> tuple[list[str], list[dict], list[dict]]:
     """The two series' full bars on their common dates, oldest first: (dates, a_bars, b_bars).
 
-    Sessions present for only one leg are dropped, not filled: a holiday one venue observes and the
-    other does not would invent a return. Whole bars, because a backtest fills at the next open.
+    One-leg sessions are dropped, not filled, which would invent a return.
     """
     by_date = {bar["date"]: bar for bar in b}
     both = [(bar["date"], bar, by_date[bar["date"]]) for bar in a if bar["date"] in by_date]
@@ -64,10 +49,7 @@ def correlation(a: list[float], b: list[float]) -> float | None:
 
 
 def hedge_ratio(a: list[float], b: list[float]) -> float:
-    """OLS slope of `a` on `b`: how much of B hedges one unit of A.
-
-    Fitted on prices, not returns, because the spread we trade is a price difference.
-    """
+    """OLS slope of `a` on `b` on prices (the traded spread is a price difference)."""
     if len(a) < 3:
         raise ValueError("a hedge ratio needs at least 3 observations")
     var = statistics.variance(b)
@@ -79,14 +61,12 @@ def hedge_ratio(a: list[float], b: list[float]) -> float:
 def hedge_problem(beta: float) -> str | None:
     """Why `beta` cannot be traded as a pair, or None if it can.
 
-    Price-level OLS returns a negative slope whenever two price levels drift apart, even for names
-    whose returns correlate well. That is the regression reporting "not cointegrated here", and it
-    must never reach a backtest, where it becomes a long-both-legs position called market-neutral.
+    A negative price-level slope means not cointegrated; it must never reach a backtest.
     """
     if beta <= 0:
-        return (f"the hedge ratio is {beta:.4f}, which is negative: the two price levels drifted "
-                "apart over this window, so the spread would be long both legs rather than market "
-                "neutral. These names are not cointegrated here.")
+        return (f"the hedge ratio is {beta:.4f}, which is negative: the two price levels moved in "
+                "opposite directions over this window, so the spread would be long both legs "
+                "rather than market neutral.")
     if beta < MIN_HEDGE_RATIO:
         return f"the hedge ratio is {beta:.4f}, so the second leg barely hedges anything"
     if beta > MAX_HEDGE_RATIO:
@@ -100,22 +80,14 @@ def spread(a: list[float], b: list[float], beta: float) -> list[float]:
 
 
 def zscores(values: list[float], mean: float, sd: float) -> list[float]:
-    """`values` expressed in standard deviations from a *given* mean and sd.
-
-    Arguments rather than computed here: a holdout must score against the in-sample fit, and
-    recomputing them on the holdout would leak the answer.
-    """
+    """`values` in sd from a *given* mean and sd: a holdout must use the in-sample fit."""
     if sd < FLAT:
         raise ValueError("a zero-variance spread has no z-score")
     return [(v - mean) / sd for v in values]
 
 
 def half_life(values: list[float]) -> float | None:
-    """Sessions for a deviation to decay halfway back, from an AR(1) fit of the spread.
-
-    Regress the change on the level: a negative slope means reversion and its rate gives the
-    half-life. None when the fit is non-reverting, which says the spread wanders rather than returns.
-    """
+    """Sessions for a deviation to decay halfway back, from an AR(1) fit; None if non-reverting."""
     if len(values) < 10:
         return None
     level, change = values[:-1], [y - x for x, y in zip(values, values[1:])]
@@ -128,17 +100,13 @@ def half_life(values: list[float]) -> float | None:
 
 
 def crossings(values: list[float], mean: float) -> int:
-    """How many times the series crosses `mean`. Frequent crossings are the trade actually working."""
+    """How many times the series crosses `mean`."""
     sides = [v > mean for v in values]
     return sum(1 for x, y in zip(sides, sides[1:]) if x != y)
 
 
 def rolling_beta(a: list[float], b: list[float], window: int = 126) -> list[float]:
-    """Hedge ratio recomputed over each `window` of sessions (126 is about six months).
-
-    A pair whose beta drifts is not one relationship but a different one in each regime, and
-    backtesting it on a single number is self-deception.
-    """
+    """Hedge ratio recomputed over each `window` of sessions (126 is about six months)."""
     if len(a) < window + 1:
         return []
     out = []
@@ -151,10 +119,7 @@ def rolling_beta(a: list[float], b: list[float], window: int = 126) -> list[floa
 
 
 def beta_stability(betas: list[float]) -> float | None:
-    """Spread of the rolling hedge ratio relative to its level: 0 is rock steady, higher is drifting.
-
-    Scaled by |mean| so it compares across pairs with very different ratios.
-    """
+    """Rolling hedge ratio's sd over |mean|: 0 is rock steady, higher is drifting."""
     if len(betas) < 3:
         return None
     mean = statistics.fmean(betas)
@@ -162,11 +127,7 @@ def beta_stability(betas: list[float]) -> float | None:
 
 
 def summary(dates: list[str], a: list[float], b: list[float]) -> dict:
-    """Every statistic for one pair over the window it is given.
-
-    This is the screening view. A backtest instead fits on part of the window and scores on the
-    rest (see backtest.py), which is the only way to tell a real relationship from a fitted one.
-    """
+    """Every statistic for one pair over the window it is given (the screening view)."""
     ra, rb = returns(a), returns(b)
     beta = hedge_ratio(a, b)
     s = spread(a, b, beta)
@@ -185,19 +146,17 @@ def summary(dates: list[str], a: list[float], b: list[float]) -> dict:
         "hedge_ratio": round(beta, 4),
         "current_z": _round((s[-1] - mean) / sd if sd >= FLAT else None, 2),
         "half_life_days": _round(hl, 1),
-        # Per interval between sessions, of which there are one fewer than there are sessions.
+        # Per interval between sessions (one fewer than sessions).
         "crossings_per_year": _round(crossed / max(len(dates) - 1, 1) * TRADING_DAYS, 1),
         "beta_stability": _round(beta_stability(betas), 3),
     }
 
 
-def episodes(dates: list[str], z: list[float], threshold: float = 2.0, min_days: int = 10) -> list[dict]:
-    """Runs where |z| stayed above `threshold` for at least `min_days` consecutive sessions.
+RESOLVE_WINDOW = 20  # sessions after a run in which the spread must come back inside one sigma
 
-    The divergences worth explaining: a spread two sigma wide for a fortnight is either a
-    dislocation that closed or a relationship that broke, and only news or a filing over exactly
-    that window tells you which. Each run carries its dates, so the research cannot drift.
-    """
+
+def episodes(dates: list[str], z: list[float], threshold: float = 2.0, min_days: int = 10) -> list[dict]:
+    """Runs where |z| stayed above `threshold` for at least `min_days` consecutive sessions."""
     out, start = [], None
     for i, value in enumerate(z + [0.0]):  # the sentinel closes a run still open at the end
         wide = abs(value) > threshold and i < len(z)
@@ -214,10 +173,19 @@ def episodes(dates: list[str], z: list[float], threshold: float = 2.0, min_days:
                     "direction": "a_rich" if statistics.fmean(run) > 0 else "a_cheap",
                     "peak_z": round(run[peak], 2),
                     "peak_date": dates[start + peak],
-                    "resolved": abs(z[i]) < 1.0 if i < len(z) else False,
+                    **_resolution(dates, z, i),
                 })
             start = None
     return out
+
+
+def _resolution(dates: list[str], z: list[float], after: int) -> dict:
+    """Whether the spread came back inside one sigma within RESOLVE_WINDOW sessions of a run.
+
+    Judged over a window: the first session after a run only has to fall below the threshold.
+    """
+    back = next((j for j in range(after, min(after + RESOLVE_WINDOW, len(z))) if abs(z[j]) < 1.0), None)
+    return {"resolved": back is not None, "resolved_on": dates[back] if back is not None else None}
 
 
 def _round(value: float | None, digits: int) -> float | None:

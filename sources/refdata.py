@@ -1,17 +1,6 @@
-"""Read-only SQL over the committed reference database.
+"""Read-only SQL over the committed reference database (the Text2SQL surface).
 
-The Text2SQL surface: an agent reads the schema, checks a column's real values, then writes its own
-SELECT. Load-bearing rather than decorative, because resolving "the energy sector" to a list of
-symbols is the first step of every screen, and doing it in SQL makes that step auditable - the
-query is shown beside the answer.
-
-**The security boundary is the connection, not the prompt.** `read_only` blocks writes,
-`enable_external_access=False` stops a query reaching the filesystem or network through
-`read_csv('http://...')`, and `lock_configuration=True` stops a query turning either back on. A
-model may write any SELECT it likes; none can leave this file.
-
-One connection per process, a fresh cursor per call: DuckDB connections are not thread-safe but
-cursors are cheap, and FastAPI serves requests on a thread pool.
+The boundary is the connection (read-only, no external access, config locked), not the prompt.
 """
 
 import functools
@@ -29,10 +18,7 @@ MAPPINGS_PATH = Path(__file__).resolve().parent.parent / "data" / "refdata_mappi
 
 MAX_ROWS = 100  # a wide GROUP BY would otherwise flood an agent's own context
 
-# Anything that is not a single read, matched as whole words so a column named 'updated' is fine.
-# The reader families take a \w* suffix: \bread_csv\b does not match read_csv_auto, because the
-# underscore is a word character. The connection refuses all of these anyway; this is so the model
-# gets a message it can act on rather than a DuckDB permission error.
+# Anything but one read; the connection refuses these anyway, but this tells the model why.
 FORBIDDEN = re.compile(
     r"\b(attach|detach|copy|install|load|export|import|create|insert|update|delete|drop|alter|"
     r"truncate|grant|revoke|set|call|glob|"
@@ -40,18 +26,25 @@ FORBIDDEN = re.compile(
     re.I,
 )
 
-# DuckDB's own catalog and settings. This is a privacy boundary, not a safety one - the connection
-# already blocks everything dangerous - and it is the only thing standing between a model-written
-# SELECT and the database's absolute path, which on a developer machine contains the owner's
-# account name and would then appear in an answer and in the tool transcript on the page.
-#
-# Matched by family rather than by name: duckdb_databases() was blocked while duckdb_tables() was
-# not, and current_setting('temp_directory') returned the full path with no catalog view involved.
+# Privacy, not safety: stops a SELECT revealing the database path, which has the owner's name.
 INTERNAL_VIEWS = re.compile(
     r"\b(duckdb_\w+|pg_\w+|sqlite_master|sqlite_schema|current_setting|current_database|"
-    r"current_schemas?)\b",
+    r"current_schemas?|(?:query|query_table|which_secret)(?=\s*\())\b",  # query('...') runs any SQL
     re.I,
 )
+
+
+def _scrub(value):
+    """Remove local filesystem paths from any value: the last defence past INTERNAL_VIEWS."""
+    if isinstance(value, str):
+        for path, label in ((str(DB_PATH.parent.parent), "<repo>"), (str(Path.home()), "~")):
+            value = re.sub(re.escape(path), label, value, flags=re.I)
+        return value
+    if isinstance(value, (list, tuple)):
+        return type(value)(_scrub(v) for v in value)
+    if isinstance(value, dict):
+        return {k: _scrub(v) for k, v in value.items()}
+    return value
 
 
 class RefDataError(Exception):
@@ -79,11 +72,7 @@ def schema() -> dict:
 
 
 def enum_values(column: str) -> list[str]:
-    """Every distinct value of `column`, so a filter can be written against real values.
-
-    Guessing a sector name is the usual way a generated query returns nothing. Read from the live
-    table rather than the schema card, so it cannot go stale.
-    """
+    """Every distinct value of `column`, from the live table, so filters use real values."""
     names = [c["name"] for c in schema()["columns"]]
     if column not in names:
         raise RefDataError(f"No column '{column}'. Columns are: {', '.join(names)}.")
@@ -101,8 +90,7 @@ def _cursor() -> duckdb.DuckDBPyConnection:
 def query(sql: str) -> dict:
     """Run one read-only SELECT and return {columns, rows, row_count, sql, truncated}.
 
-    The returned `sql` is the statement actually executed, so it can be cited and re-run. Refuses
-    rather than sanitises: rewriting a model's query would make that citation a lie.
+    Refuses rather than sanitises, so the returned `sql` is exactly what ran and can be cited.
     """
     text = sql.strip().rstrip(";").strip()
     if not text:
@@ -111,9 +99,11 @@ def query(sql: str) -> dict:
         raise RefDataError("Send one statement at a time, with no semicolons inside it.")
     if not re.match(r"^(select|with)\b", text, re.I):
         raise RefDataError("Only SELECT (or WITH ... SELECT) queries are allowed.")
-    if found := FORBIDDEN.search(text):
+    # Strip comments and double quotes first: `"query"(...)` is the same call as `query(...)`.
+    bare = re.sub(r"/\*.*?\*/|--[^\n]*", " ", text, flags=re.S).replace('"', "")
+    if found := FORBIDDEN.search(bare):
         raise RefDataError(f"'{found.group(0)}' is not allowed here; this connection is read-only.")
-    if found := INTERNAL_VIEWS.search(text):
+    if found := INTERNAL_VIEWS.search(bare):
         raise RefDataError(
             f"'{found.group(0)}' is DuckDB's own catalog, not reference data. Call "
             f"get_reference_schema for the columns of 'instruments'."
@@ -125,19 +115,16 @@ def query(sql: str) -> dict:
         columns = [d[0] for d in result.description]
         rows = result.fetchall()
     except duckdb.Error as e:
-        # DuckDB's messages name the offending column and suggest near-matches, so they are worth
-        # passing through verbatim rather than replacing with something vaguer.
-        raise RefDataError(f"SQL error: {e}")
+        # DuckDB's messages name the column and suggest near-matches, so pass them through.
+        raise RefDataError(_scrub(f"SQL error: {e}"))
     truncated = len(rows) > MAX_ROWS
     return {
         "columns": columns,
-        "rows": [list(r) for r in rows[:MAX_ROWS]],
+        "rows": _scrub([list(r) for r in rows[:MAX_ROWS]]),
         "row_count": len(rows[:MAX_ROWS]),
         "truncated": truncated,
         "sql": text,
-        # Named so the agent can attribute the figure without inventing a provenance string. There
-        # is deliberately no `delay`: a committed table has none, and the prompt used to imply
-        # every result had one, which produced answers citing a "delay: static" that never existed.
+        # No `delay`: a committed table has none.
         "source": "committed reference database (data/refdata.duckdb)",
         **({"note": f"Showing the first {MAX_ROWS} rows; add a tighter WHERE or an ORDER BY."} if truncated else {}),
     }
@@ -145,11 +132,7 @@ def query(sql: str) -> dict:
 
 @functools.cache
 def name_for(symbol: str) -> str | None:
-    """The listed name of `symbol` from the reference table, or None if it is not in there.
-
-    Table first, so a name in the tape matches the name used in an answer. Callers fall back to the
-    listing directory for anything outside the table, such as the indices.
-    """
+    """The listed name of `symbol` from the reference table, or None if it is not in there."""
     row = _cursor().execute("SELECT name FROM instruments WHERE symbol = ?", [symbol.strip().upper()]).fetchone()
     return row[0] if row else None
 
@@ -162,9 +145,7 @@ def resolve_universe(
 ) -> dict:
     """Turn a sector, an ETF family or an explicit list into the symbols to screen.
 
-    Returns the symbols *and* the SQL that produced them, since the universe decides every pair
-    that follows. Capped because screening is quadratic, and five GICS sectors exceed the cap - for
-    those the result must say so loudly, or the agent calls a quarter of a sector the sector.
+    Returns the SQL too. Capped (screening is quadratic), and truncation must be reported loudly.
     """
     capped = min(max(2, limit), config.MAX_UNIVERSE)
     if symbols:
@@ -236,18 +217,14 @@ def _universe(rows: list[tuple], sql: str, missing: list[str],
             f"PARTIAL UNIVERSE: {label} has {available} names in the reference table but screening "
             f"is capped at {config.MAX_UNIVERSE}, so {dropped} were dropped and only the first "
             f"{len(rows)} alphabetically were screened. This is a subset: say so, and do not "
-            f"describe the result as covering {label}. To cover it properly, screen its "
-            f"gics_sub_industry groups one at a time: run query_reference with "
+            f"describe the result as covering {label}. Full coverage takes one screen per "
+            f"gics_sub_industry group; list them with query_reference: "
             f"\"SELECT gics_sub_industry, count(*) FROM instruments WHERE {where} "
-            f"GROUP BY 1 ORDER BY 2 DESC\" and screen each in turn."
+            f"GROUP BY 1 ORDER BY 2 DESC\"."
         )
     return out
 
 
 def _safe(value: str) -> str:
-    """Escape a single-quoted SQL literal.
-
-    Interpolated rather than bound so the returned `sql` is complete and re-runnable. The
-    connection is read-only with external access off, so a bad literal costs a syntax error.
-    """
+    """Escape a single-quoted SQL literal (interpolated so the returned `sql` is re-runnable)."""
     return value.replace("'", "''")
