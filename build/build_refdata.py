@@ -25,7 +25,7 @@ SP500_URL = "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies"
 
 # (symbol, leverage, underlying): the stated daily multiple and the tracked fund; 1/None is plain.
 ETF_FAMILIES: dict[str, list[tuple[str, float, str | None]]] = {
-    "broad_us": [("SPY", 1, None), ("VOO", 1, None), ("IVV", 1, None), ("SPLG", 1, None),
+    "broad_us": [("SPY", 1, None), ("VOO", 1, None), ("IVV", 1, None), ("SPYM", 1, None),
                  ("VTI", 1, None), ("ITOT", 1, None), ("QQQ", 1, None), ("QQQM", 1, None),
                  ("DIA", 1, None), ("IWM", 1, None), ("IWB", 1, None), ("VT", 1, None)],
     "sp500_leveraged": [("SSO", 2, "SPY"), ("UPRO", 3, "SPY"), ("SPXL", 3, "SPY"), ("SPUU", 2, "SPY"),
@@ -59,9 +59,9 @@ ETF_FAMILIES: dict[str, list[tuple[str, float, str | None]]] = {
                  ("JETS", 1, None), ("TAN", 1, None), ("ICLN", 1, None), ("ARKK", 1, None)],
 }
 
-# `symbol` is the Cboe spelling, `sec_symbol` the SEC one (BRK.B vs BRK-B).
+# `symbol` is the exchange spelling, `sec_symbol` the SEC one (BRK.B vs BRK-B).
 COLUMNS = [
-    ("symbol", "VARCHAR", "Cboe ticker, the spelling every price tool takes. E.g. 'NVDA', 'BRK.B'."),
+    ("symbol", "VARCHAR", "Exchange ticker, the spelling every price tool takes. E.g. 'NVDA', 'BRK.B'."),
     ("sec_symbol", "VARCHAR", "SEC ticker spelling, which uses '-' for share classes. E.g. 'BRK-B'."),
     ("name", "VARCHAR", "Company or fund name from the listing directory. Rarely NULL when that directory omits a fund; the symbol still trades."),
     ("type", "VARCHAR", "'stock' or 'etf'."),

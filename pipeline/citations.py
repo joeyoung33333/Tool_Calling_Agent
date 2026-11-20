@@ -22,12 +22,12 @@ NUMBER = re.compile(
 
 # Not claims, so removed before counting: years, dates, window lengths ("26.2 days" still counts).
 NOT_A_CLAIM = re.compile(
-    r"\b(19|20)\d\d(-\d\d(-\d\d)?)?\b"
+    r"\b(19|20)\d\d(-\d\d(-\d\d)?)?\b(?!\.\d)"
     r"|\b\d+(?:\.\d+)?-(?:day|week|month|year|session|sigma|leg)s?\b"
     r"|\b(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s+\d{1,2}\b"
     r"|\b\d{1,2}\s+(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\b"
     r"|S&P\s*\d+|\bNasdaq[-\s]?100\b|\bRussell\s*\d+\b|\bDow\s*30\b"  # index names, not data
-    r"|\b(?:8|10)-[KQ]\b|\bForm\s+\d+\b",  # SEC form names
+    r"|\b(?:8|10)-[KQ]s?\b|\bForm\s+\d+\b",  # SEC form names
     re.I,
 )
 

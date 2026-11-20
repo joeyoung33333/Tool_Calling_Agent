@@ -39,7 +39,7 @@ class RunContext:
 
     # Loop control, counted here so the prompt cannot negotiate it.
     report_question: str = ""  # the Lead's restated question, set by research.write_report
-    refused: str = ""  # why research() just declined to run, so its row is marked failed
+    refused: dict[str, str] = field(default_factory=dict)  # tool_call_id -> why research() declined
     rate_limited: int = 0  # upstream 429s this run, from the model or a data feed
     rounds_used: int = 0
     started_at: float = field(default_factory=time.monotonic)
@@ -98,8 +98,9 @@ class ToolRecorder(RunHooks):
         }
         error = _error_of(str(result))
         run = getattr(context, "context", None)
-        if tool.name == "research" and getattr(run, "refused", ""):
-            error, run.refused = run.refused, ""
+        call_id = getattr(context, "tool_call_id", "")
+        if tool.name == "research" and call_id in getattr(run, "refused", {}):
+            error = run.refused.pop(call_id)
         if error:
             row["error"] = error  # drawn in red, like a failed agent
         self.tool_calls.append(row)

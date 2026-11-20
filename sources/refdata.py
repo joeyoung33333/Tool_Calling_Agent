@@ -137,6 +137,20 @@ def name_for(symbol: str) -> str | None:
     return row[0] if row else None
 
 
+@functools.cache
+def is_etf(symbol: str) -> bool | None:
+    """Whether `symbol` is an ETF per the reference table, or None if it is not in there."""
+    row = _cursor().execute("SELECT is_etf FROM instruments WHERE symbol = ?", [symbol.strip().upper()]).fetchone()
+    return bool(row[0]) if row else None
+
+
+@functools.cache
+def cik_for(symbol: str) -> int | None:
+    """The SEC CIK of `symbol` from the reference table (every S&P 500 stock), or None."""
+    row = _cursor().execute("SELECT cik FROM instruments WHERE symbol = ?", [symbol.strip().upper()]).fetchone()
+    return int(row[0]) if row and row[0] is not None else None
+
+
 def resolve_universe(
     sector: str | None = None,
     etf_family: str | None = None,

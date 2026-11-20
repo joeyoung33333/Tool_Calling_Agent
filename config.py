@@ -5,8 +5,9 @@ Set so the worst case finishes inside 3.5 minutes. Data limits live in pipeline/
 
 # --- Models ---
 
-# Pinned for the Clarifier, Lead and Writer (they ignore the dropdown); few calls each.
-REASONING_MODEL = "vertex_ai/gemini-3.8-flash"
+# Pinned for the Clarifier, Lead and Writer (they ignore the dropdown). The Lead's planning turn
+# measured 6-14s here against 8-68s on 3.8 Flash (2026-11-19).
+REASONING_MODEL = "vertex_ai/gemini-3.5-flash"
 
 # Dropdown name -> LiteLLM id: the GA 3.x models Vertex serves this project (probed 2026-11-17).
 RESEARCHER_MODELS = {
@@ -21,16 +22,19 @@ DEFAULT_RESEARCHER_MODEL = "Gemini 3.5 Flash-Lite"
 # Pinned so reasoning does not vary by model (unset, the Flash-Lites do none).
 REASONING_EFFORT = "medium"
 
-# Retried on when the pinned Clarifier or Writer fails (10/10 gate verdicts; reports in 10-12s).
+# Retried on when a pinned agent fails (10/10 gate verdicts; reports in 10-12s).
 FALLBACK_MODEL = "vertex_ai/gemini-3.5-flash-lite"
 
 # --- Model calls ---
 
-# The Writer measured 35s on one long report. Keep TIMEOUT x (1 + RETRIES) under TOTAL_BUDGET_S.
-MODEL_TIMEOUT_S = 60
+# Per model call, and LiteLLM retries a timeout. 25s clears the 95th percentile of every agent turn
+# in the recorded runs (Analyst 20.9s, Researcher 16.9s, Lead planning at most 13.9s).
+TURN_TIMEOUT_S = 25
+WRITER_CALL_TIMEOUT_S = 45  # 3.5 Flash wrote reports in 22-28s; a stall moves to FALLBACK_MODEL
 MODEL_RETRIES = 2  # Vertex rate-limits bursts, and a fan-out makes many calls at once
+PINNED_RETRIES = 0  # a stalled Lead or Writer moves to FALLBACK_MODEL instead of retrying twice
 
-# Held back for the Writer (35-60s on 3.8 Flash), including WRITER_FALLBACK_S for its retry.
+# Held back for the Writer (25-35s), including WRITER_FALLBACK_S for its retry.
 WRITEUP_RESERVE_S = 75
 
 # Retrying into an exhausted quota spends the budget; after this many, stop and report.
@@ -40,8 +44,8 @@ MAX_RATE_LIMITS = 3
 
 MAX_TURNS = 12  # one turn is a model call plus the tool calls it asks for, so this caps rounds
 # A failed gate would send a vague question to research, so it is retried on FALLBACK_MODEL.
-CLARIFIER_TIMEOUT_S = 20
-CLARIFIER_FALLBACK_TIMEOUT_S = 15
+CLARIFIER_TIMEOUT_S = 12  # 3.5 Flash: 90% of 30 gate calls under 8s; 2 took 15s and 48s
+CLARIFIER_FALLBACK_TIMEOUT_S = 10  # Flash-Lite: 95% under 8.5s, slowest of 30 was 9.2s
 LEAD_TURNS = 6  # enough for research -> research -> write_report, with slack
 MAX_FANOUT_ROUNDS = 2  # a second round exists to fill a stated gap, not to keep fishing
 MAX_BRIEFS_PER_ROUND = 4

@@ -7,6 +7,15 @@ Author: Joseph Young (jay2147)
 **Live:** https://tool-calling-agent-git-llmb6vmaoa-nn.a.run.app (access details under
 [Cloud Deployment](#cloud-deployment))
 
+$\color{red}\textsf{\textbf{Late Changes due to Cboe blocking this app on 2026-11-19.}}$<br>
+$\color{red}\textsf{\textbf{The app was deployed and working on time, before the block.}}$<br>
+$\color{red}\textsf{\textbf{Update to switch out underlying pricing source to Nasdaq, with Yahoo Finance as a fallback.}}$
+
+**Error:** every price request failed with `cdn.cboe.com has no data for this request: the symbol is
+not available on this feed.` **Reason:** Cboe moved its data behind Cloudflare, which redirects
+`cdn.cboe.com` to `cdn-api.cboe.com` and answers this app with HTTP 403, "Sorry, you have been
+blocked".
+
 The three test questions with expected answers: [Sample Queries](#sample-queries).
 
 ## The Question
@@ -17,7 +26,7 @@ The three test questions with expected answers: [Sample Queries](#sample-queries
 > a relationship that has actually broken?
 
 Converge draws up to 40 names from its reference database (the S&P 500 plus 122 curated ETFs),
-fetches three years of daily prices for them from Cboe, fits and ranks every pair on the first 70%
+fetches three years of daily prices for them from Nasdaq, fits and ranks every pair on the first 70%
 of that history (about two years), then backtests the best pairs on the final 30% (about eleven
 months). When a pair stays diverged, it pulls SEC filings and news headlines from that window to
 explain why. The agents decide what to investigate and which tools to call with which arguments;
@@ -103,9 +112,9 @@ evidence list.
 
 | Agent | Model | Reasoning | Why |
 |---|---|---|---|
-| Clarifier | Gemini 3.8 Flash, pinned; retried on 3.5 Flash-Lite if it fails | Medium | Decides the route |
-| Lead | Gemini 3.8 Flash, pinned | Medium | Plans the research |
-| Writer | Gemini 3.8 Flash, pinned; retried on 3.5 Flash-Lite if it fails | Medium | Writes the answer |
+| Clarifier | Gemini 3.5 Flash, pinned; retried on 3.5 Flash-Lite after 12s | Medium | Decides the route |
+| Lead | Gemini 3.5 Flash, pinned; retried on 3.5 Flash-Lite if it fails before research | Medium | Plans the research |
+| Writer | Gemini 3.5 Flash, pinned; retried on 3.5 Flash-Lite if it fails | Medium | Writes the answer |
 | Analyst | Dropdown | Medium | Makes most of the calls |
 | Researchers | Dropdown | Medium | Make most of the calls |
 
@@ -137,62 +146,64 @@ closes.
 - **A screen covers at most 40 names.** Five GICS sectors are larger (Industrials holds 83), so
   their screens take the first 40 by ticker and report the number dropped; to cover one, screen
   its sub-industries one at a time.
-- **Rate limits.** Cboe throttles bursts, so a wide screen can report symbols it could not fetch.
+- **Unofficial price feeds.** Nasdaq and Yahoo Finance publish no limits for these endpoints, so a
+  wide screen can report symbols it could not fetch. Indices are not covered; use their ETFs.
 - **A strict bar.** A pair is viable only if its holdout Sharpe beats what the luckiest of the pairs
   backtested would post by chance: about 2.2 for the default eight on an 11-month holdout. Few pairs
   clear it, and the agent says so rather than dropping them.
 - **Price returns only.** Prices are split-adjusted but exclude dividends, which flatters a short
   leg and penalizes a long one.
-- **Model latency.** A turn on the pinned Gemini 3.8 Flash occasionally takes over a minute. The run
-  then says it ran out of time and answers from what it had gathered.
-- **Not covered:** options, crypto, futures, FX, rates, fundamentals, Form 4 insider trades and
-  intraday bars.
+- **Model latency.** A Gemini call occasionally stalls for a minute. Each call gives up after 25s
+  (the Clarifier after 12s, the Writer after 45s), and the pinned agents retry on Flash-Lite. If time
+  still runs out, the run says so and answers from what it had gathered.
+- **Not covered:** options, crypto, futures, FX, rates, indices, fundamentals, Form 4 insider trades
+  and intraday bars. Prices are end of day: the last bar is the last completed session.
 
 ## Sample Queries
 
 The UI's three research-path examples, each fanned out to parallel researchers, beside the same
-question to the Writer's model (Gemini 3.8 Flash) with **no tools and no system prompt**. Recorded
-2026-11-18, quoted verbatim; numbers move with the market, so expect the same shape, not digits.
+question to the Writer's model (Gemini 3.5 Flash) with **no tools and no system prompt**. Recorded
+2026-11-20, quoted verbatim; numbers move with the market, so expect the same shape, not digits.
 
 ---
 
 ### 1. "Which pairs in the energy sector are viable pair trades?"
 
-**Path** — Clarifier → Lead → 4 Researchers in parallel → Writer → citation audit
+**Path** — Clarifier → Lead → 3–4 Researchers in parallel → Writer → citation audit
 
 **Tool calls** — `screen_pairs` once per brief, on the whole sector or one sub-industry, after
 `get_reference_schema` and `query_reference` resolve the sub-industries; `analyze_pair` and
-`research_divergence` for a named pair. The recorded run made 20 calls.
+`research_divergence` for a named pair. The recorded run made 14 calls.
 
 **Source** — universe from `data/refdata.duckdb`, table `instruments` (GICS sector Energy, 21
-names); end-of-day market data from Cboe,
-`cdn.cboe.com/api/global/delayed_quotes/charts/historical/{symbol}.json` (3 years of daily bars).
+names); end-of-day market data from Nasdaq,
+`api.nasdaq.com/api/quote/{symbol}/historical` (Yahoo Finance if Nasdaq fails), 3 years of daily bars.
 
 **Expect** — **no pair with a positive deflated Sharpe**, each reported with its holdout Sharpe and
-deflated Sharpe. About 1.5–2 minutes.
+deflated Sharpe. About two minutes.
 
-| Converge (79s) | Gemini 3.8 Flash, no tools |
+| Converge (114s) | Gemini 3.5 Flash, no tools |
 |---|---|
-| "None of the screened pairs in the energy sector are viable pair trades, as no tested pair achieved a positive deflated Sharpe ratio." E.g. COP/OXY: correlation **0.81**, deflated Sharpe **−3.33**. | "Here are the most viable pairs across the energy sector", led by **ExxonMobil vs. Chevron**, all from memory. |
+| "No pairs in the screened Energy sector are viable pair trades as none achieved a positive deflated Sharpe ratio." E.g. COP/OXY: holdout Sharpe **−1.19**, deflated Sharpe **−3.46**. | "Here are the most viable pairs in the energy sector", led by **ExxonMobil vs. Chevron**, all from memory. |
 
 ---
 
 ### 2. "Are these viable pair trades: AMZN vs GOOGL, MS vs JPM, WMT vs TGT, KO vs PEP, and SPY vs QQQ?"
 
-**Path** — Clarifier → Lead → 4 Researchers in parallel (one or two pairs each) → Writer → citation
-audit
+**Path** — Clarifier → Lead → 3–4 Researchers in parallel (one or two pairs each) → Writer →
+citation audit
 
 **Tool calls** — `analyze_pair` once per pair: 5 calls.
 
-**Source** — end-of-day market data from Cboe for the ten tickers,
-`cdn.cboe.com/api/global/delayed_quotes/charts/historical/{symbol}.json` (3 years of daily bars).
+**Source** — end-of-day market data from Nasdaq for the ten tickers,
+`api.nasdaq.com/api/quote/{symbol}/historical` (Yahoo Finance if Nasdaq fails), 3 years of daily bars.
 
 **Expect** — **nothing confirmed viable**: AMZN/GOOGL positive but undeflated, MS/JPM and SPY/QQQ
 losing on the holdout, WMT/TGT and KO/PEP rejected for a negative hedge ratio. About 1–2 minutes.
 
-| Converge (59s) | Gemini 3.8 Flash, no tools |
+| Converge (90s) | Gemini 3.5 Flash, no tools |
 |---|---|
-| "None of the evaluated pairs are viable because none have a positive deflated Sharpe ratio reported." AMZN/GOOGL holdout Sharpe **2.2** on **2** trades, uncorrected; MS/JPM **−1.85**; SPY/QQQ **−1.55**; WMT/TGT and KO/PEP hedge ratios **−0.5344** and **−0.1639**, so not tradeable. | "Yes, all five of these are **classic, highly liquid, and viable pair trades**", with KO vs PEP the "Gold Standard" and WMT vs TGT "Very High". |
+| "None of the evaluated pairs are viable pair trades as none of them have a positive deflated Sharpe ratio." AMZN/GOOGL holdout Sharpe **2.21**, uncorrected; MS/JPM **−1.88**; SPY/QQQ **−1.52**; WMT/TGT and KO/PEP hedge ratios **−0.5356** and **−0.1632**, so not tradeable. | "Yes, all five of these are viable pairs trades", with KO vs PEP rated "Excellent (The Gold Standard)". |
 
 ---
 
@@ -202,35 +213,34 @@ losing on the holdout, WMT/TGT and KO/PEP rejected for a negative hedge ratio. A
 citation audit
 
 **Tool calls** — `screen_pairs` to find the pairs, `analyze_pair` for each pair's divergence
-episodes, `research_divergence` over each episode's window. The recorded run made 21 calls (3, 9
-and 9).
+episodes, `research_divergence` over each episode's window. The recorded run made 29 calls.
 
-**Source** — end-of-day market data from Cboe and the universe from `data/refdata.duckdb`, as in
+**Source** — end-of-day market data from Nasdaq and the universe from `data/refdata.duckdb`, as in
 query 1, plus Google News RSS (`news.google.com/rss/search`) and SEC EDGAR
 (`data.sec.gov/submissions/CIK{cik}.json`) over each divergence window.
 
 **Expect** — the widest divergence named from the spread z-scores, and a plain statement when the
 news and filings do not settle the cause. About two minutes.
 
-| Converge (121s) | Gemini 3.8 Flash, no tools |
+| Converge (143s) | Gemini 3.5 Flash, no tools |
 |---|---|
-| "…among the pairs with divergence data, the refining pair VLO/MPC diverged the most", with a peak z-score of **9.54**; "the evidence does not support an answer regarding fundamental catalysts". | Reads "energy pairs" as commodities and recounts history: TTF vs Henry Hub gas in 2022, Brent vs WTI, crude vs refined products. |
+| "…ConocoPhillips and Occidental Petroleum (COP/OXY) diverged the most with a peak z-score of **9.87**, though the findings do not contain news or SEC filings to analyze the causes of this divergence." For XOM/CVX it cites a January 2026 headline on Exxon's record high. | Reads "energy pairs" as commodities and recounts history: Henry Hub vs TTF gas, Brent vs WTI, crude vs natural gas, the crack spread. |
 
 ---
 
 ### Also Worth Trying
 
-The fast-path and clarification examples from the UI, each recorded on 2026-11-18.
+The fast-path and clarification examples from the UI, each recorded on 2026-11-20.
 
 | Question | Tools and data | Expect |
 |---|---|---|
-| `Is AMZN a good pair trade with NVDA?` | `analyze_pair`; Cboe bars | Fast path, ~20s: correlation, half-life, a holdout backtest and a z-score chart. A positive holdout Sharpe (**2.17** over 5 trades): promising at most, never viable, because one pair is not deflated. |
-| `How many ETFs are in the reference database, and which ETF families are covered?` | `get_reference_schema`, `query_reference`; `data/refdata.duckdb` (`instruments`) | ~15s: **122** ETFs in **15** families, each family's count from the agent's own GROUP BY. The SQL shows in the timeline. |
-| `Chart AAPL's price over the last 6 months.` | `get_chart`; Cboe bars | ~20s: an interactive closing-price chart and the period return. |
-| `How volatile has NVDA been over the past year?` | `get_price_history`; Cboe bars | ~25s: realized volatility, period return, high and low, and a month-end price table. |
+| `Is AMZN a good pair trade with NVDA?` | `analyze_pair`; Nasdaq bars | Fast path, ~20–40s: correlation, half-life, a holdout backtest and a z-score chart. A positive holdout Sharpe (**2.15** over 5 trades): promising at most, never viable, because one pair is not deflated. |
+| `How many ETFs are in the reference database, and which ETF families are covered?` | `get_reference_schema`, `query_reference`; `data/refdata.duckdb` (`instruments`) | ~15–25s: **122** ETFs in **15** families, each family's count from the agent's own GROUP BY. The SQL shows in the timeline. |
+| `Chart AAPL's price over the last 6 months.` | `get_chart`; Nasdaq bars | ~20s: an interactive closing-price chart and the period return. |
+| `How volatile has NVDA been over the past year?` | `get_price_history`; Nasdaq bars | ~20s: realized volatility, period return, high and low, and a month-end price table. |
 | `What news and SEC filings came out for TSLA this month?` | `get_news`, `get_filings`; Google News, SEC EDGAR | ~20–30s: the month's headlines, and its 8-K, 10-K and 10-Q filings or a note that there were none. |
-| `Find a good cryptocurrency pair trade?` | None; Clarifier only | ~5s: declined as out of scope in the first sentence, with what the desk can do instead. |
-| `Chart this symbol.`, then `NVDA` | None, then `get_chart`; Cboe bars | ~5s: the Clarifier asks which symbol; the reply is charted (~10s). It asks at most once per conversation. |
+| `Find a good cryptocurrency pair trade?` | None; Clarifier only | ~5–15s: declined as out of scope in the first sentence, with what the desk can do instead. |
+| `Chart this symbol.`, then `NVDA` | None, then `get_chart`; Nasdaq bars | ~5–15s: the Clarifier asks which symbol; the reply is charted (~15s). It asks at most once per conversation. |
 
 ## Data Sources
 
@@ -254,33 +264,33 @@ To refresh membership, run `uv run build/build_refdata.py` (under a minute). It 
 database from Wikipedia's S&P 500 table, the SEC's ticker file and the Nasdaq Trader directory, and
 writes `data/refdata_mappings.json`, the schema card the Text2SQL tools give the model.
 
-Prices are not stored; every statistic is computed live from Cboe. The curated ETF families exist
-only in this build, so the bare model cannot answer query 3.
+Prices are not stored; every statistic is computed live from Nasdaq's end-of-day bars.
 
 ### The Feeds
 
 | Source | What it provides | Freshness |
 |---|---|---|
-| Cboe delayed quotes | Daily OHLCV for US stocks, ETFs and indices, 2004–present | ~15 min delayed; last close when shut |
+| Nasdaq (`api.nasdaq.com`) | Daily OHLCV for US stocks and ETFs, 10 years, split-adjusted | End of day |
+| Yahoo Finance (`query1.finance.yahoo.com`) | The same bars, used only when Nasdaq fails | End of day |
 | SEC EDGAR | 8-K events with item codes, 10-Ks and 10-Qs | Same day |
 | Google News RSS | Headlines for a symbol or keywords | Same day |
 | Nasdaq Trader | Symbol directory: listings, names, ETF flags | Daily |
 | Wikipedia | S&P 500 constituents with GICS (offline build only) | Monthly, in practice |
 
-All five are free public feeds and need no API keys. Every feed is called with one generic
+All six are free public feeds and need no API keys. Every feed is called with one generic
 User-Agent carrying no personal contact details.
 
 ## Tools
 
 | Tool | Purpose | Source |
 |---|---|---|
-| `screen_pairs` | Fit and rank every pair in a universe (sector, ETF family or list; 40 names max), then holdout-backtest the top 8 | Cboe + reference DB |
-| `analyze_pair` | One pair in full: statistics, holdout backtest, divergence episodes, z-score chart | Cboe |
+| `screen_pairs` | Fit and rank every pair in a universe (sector, ETF family or list; 40 names max), then holdout-backtest the top 8 | Nasdaq + reference DB |
+| `analyze_pair` | One pair in full: statistics, holdout backtest, divergence episodes, z-score chart | Nasdaq |
 | `research_divergence` | SEC filings for both legs over one divergence window, and news over its first 14 days | Google News, SEC EDGAR |
 | `get_reference_schema` | The reference table's columns and real enum values, for writing SQL | Reference DB |
 | `query_reference` | One read-only SELECT; returns the SQL it ran, for citation | Reference DB |
-| `get_price_history` | Period return, high, low, realized volatility, last five closes, month-end table | Cboe |
-| `get_chart` | Interactive daily closing-price line chart, on request | Cboe |
+| `get_price_history` | Period return, high, low, realized volatility, last five closes, month-end table | Nasdaq |
+| `get_chart` | Interactive daily closing-price line chart, on request | Nasdaq |
 | `get_news` | Headlines for a symbol or keywords: last 7 days, or a range up to 14 | Google News |
 | `get_filings` | 8-K events and 10-K/10-Q reports: latest, or a date range | SEC EDGAR |
 
@@ -325,7 +335,7 @@ quant/pairs.py           Hedge ratio, spread, z-scores, half-life, rolling beta
 quant/backtest.py        Holdout split, frozen parameters, deflated Sharpe
 quant/screen.py          Every combination in a universe, fitted and ranked
 
-sources/data.py          Cboe, SEC EDGAR, Google News, Nasdaq Trader
+sources/data.py          Nasdaq, Yahoo Finance, SEC EDGAR, Google News, Nasdaq Trader
 sources/refdata.py       The read-only DuckDB connection and universe resolution
 
 data/                    The committed reference database and its schema card
