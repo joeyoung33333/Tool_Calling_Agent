@@ -127,8 +127,8 @@ def _price_history(symbol: str, start: str, end: str | None = None) -> tuple[dic
         "period_low": min(b["low"] for b in bars),
         "realized_vol_pct": round(vol, 2) if vol is not None else None,
         "last_5_closes": recent,
-        "source": "Cboe",
-        "delay": "daily bars, split-adjusted; latest session included",
+        "source": data.PRICE_SOURCE,
+        "delay": "end-of-day daily bars, split-adjusted; the last completed session",
     }
     if (date.fromisoformat(bars[0]["date"]) - first).days > 7:  # e.g. the symbol listed after `start`
         out["note"] = f"There is no data before {bars[0]['date']}, so the range starts there."
@@ -161,8 +161,8 @@ def _chart(symbol: str, start: str, end: str | None = None) -> tuple[dict, dict]
         **_period(s, bars),
         "daily_bars": len(bars),
         "chart": "A daily closing-price line chart is now shown to the user.",
-        "source": "Cboe",
-        "delay": "daily bars, split-adjusted; latest session included",
+        "source": data.PRICE_SOURCE,
+        "delay": "end-of-day daily bars, split-adjusted; the last completed session",
     }
     figure = chart.line(f"{s} close", [(b["date"], b["close"]) for b in thinned], title, "Close")
     return summary, figure
@@ -238,7 +238,8 @@ def _analyze_pair(
            "holdout_sessions": len(dates) - cut,
            # Here too: an untradeable pair returns before any backtest runs.
            "limitations": backtest.LIMITATIONS,
-           "source": "Cboe", "delay": "daily bars, split-adjusted; price return only (no dividends)"}
+           "source": data.PRICE_SOURCE,
+           "delay": "end-of-day daily bars, split-adjusted; price return only (no dividends)"}
 
     if not stats["tradeable"]:
         # Still chart it, rebuilt from the unrounded fit, not stats' display-rounded values.
@@ -326,7 +327,7 @@ def _screen_pairs(
                "deflation_note": shared.get("deflation_note"),
                # Same precedence as resolve_universe, so an ignored junk `sector` cannot title it.
                "chart_label": ("selected symbols" if symbols else etf_family or sector or "universe"),
-               "source": "Cboe daily bars; universe from the committed reference database",
+               "source": f"{data.PRICE_SOURCE} end-of-day bars; universe from the committed reference database",
                "detail": "Call analyze_pair on any pair above for its episodes, trades and chart."}
     return summary, _ranked_table(summary)
 
@@ -364,12 +365,14 @@ def _ranked_table(summary: dict) -> dict:
         rows.append([build(candidate, holdout) for _, _, build in SCREEN_ROWS])
     fitted = f"{config.IN_SAMPLE_FRAC:.0%}"
     held = f"{1 - config.IN_SAMPLE_FRAC:.0%}"
+    trials = summary.get("trials_considered") or 0
     note = (f"Pairs are fitted and ranked on the first {fitted} of the window, then traded on the last "
             f"{held} with that fit unchanged: in beyond ±{config.ENTRY_Z:g}σ, out inside "
             f"±{config.EXIT_Z:g}σ, cut at ±{config.STOP_Z:g}σ or after {config.MAX_HOLD_SESSIONS} "
-            f"sessions, net of costs. Deflated is the Sharpe less what the luckiest of the "
-            f"{summary.get('trials_considered') or ''} pairs backtested would post by chance; "
-            f"only a positive one counts.")
+            f"sessions, net of costs. " + (
+                f"Deflated is the Sharpe less what the luckiest of the {trials} pairs counted as "
+                f"tried would post by chance; only a positive one counts." if trials >= 2
+                else "Deflated needs at least two pairs tried, so it is blank here."))
     return chart.table(
         [name for name, _, _ in SCREEN_ROWS],
         rows,
@@ -445,11 +448,11 @@ def get_price_history(
     ctx: RunContextWrapper[RunContext], symbol: str, start: str, end: str | None = None
 ) -> str:
     """Daily prices for one symbol: period return, high, low, realized volatility and the last five
-    closes, plus a month-end price table shown to the user. The last bar is today's price, about 15
-    minutes delayed, so this also answers "where is it trading now?".
+    closes, plus a month-end price table shown to the user. Prices are end of day: the last bar is the
+    last completed session, so "where is it trading now?" gets the latest close, said as such.
 
     Args:
-        symbol: Ticker, not a company name. E.g. 'NVDA', 'SPY', or the index 'VIX', 'SPX' or 'RUT'.
+        symbol: Ticker of a US stock or ETF, not a company name or an index. E.g. 'NVDA' or 'SPY'.
         start: First date, YYYY-MM-DD, worked out from today (e.g. 365 days ago for 'last year').
             At most 10 years back.
         end: Last date, YYYY-MM-DD. Defaults to today.

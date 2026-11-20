@@ -30,6 +30,11 @@ NOTHING_FOUND = (
     "is nothing I can honestly report. The tool calls below show what was tried."
 )
 
+TIMED_OUT_EMPTY = (
+    "**This question ran out of time** before anything usable was gathered. A narrower question "
+    "will finish."
+)
+
 OVER_TIME = (
     "**This question ran out of time**, so the answer below uses only what had been gathered by "
     "then. A narrower question will finish."
@@ -58,47 +63,20 @@ async def answer(question: str, session: Session | None, researcher_model: str) 
 
     # On the run's clock; research leaves the Writer's reserve, the fast path has no Writer.
     budget = max(15.0, context.seconds_left() if verdict.simple else context.research_left())
-    top_started = recorder.elapsed()
     top_name = "Analyst" if verdict.simple else "Lead"
-    needs_writer, ended_normally, timed_out, error = not verdict.simple, False, False, ""
-    retry = None
-    try:
-        result = await asyncio.wait_for(
-            Runner.run(
-                agent,
-                question,
-                session=session,
-                hooks=recorder,
-                context=context,
-                max_turns=config.MAX_TURNS if verdict.simple else config.LEAD_TURNS,
-            ),
-            timeout=budget,
-        )
-        ended_normally = True
-        response = (_attest(str(result.final_output or "").strip(), recorder.tool_calls, question)
-                    if verdict.simple else "")
-    except MaxTurnsExceeded:
-        error, response = "ran out of turns", OUT_OF_TURNS  # findings are still written up below
-    except ModelBehaviorError:
-        # The Lead imitated a data tool call from the shared session history; the analyst holds it.
-        needs_writer, error, retry = False, "called a tool it does not have; retried as the Analyst", True
-    except asyncio.TimeoutError:
-        timed_out, error, response = True, "timed out", OUT_OF_TURNS
-    except litellm.RateLimitError:
-        error, response = "rate limited", RATE_LIMITED
-    except Exception as e:
-        # Any other model failure: findings already gathered are still written up.
-        error = type(e).__name__
-        response = f"The model call failed ({type(e).__name__}); the tool calls below show what was tried."
+    run = await _run_top(agent, question, session, recorder, context, verdict.simple, budget)
+    _note_top(recorder, top_name, question, verdict.simple, context, run)
 
-    recorder.note(
-        name="agent", agent=top_name,
-        args={"question": question, "route": "fast path" if verdict.simple else "research path"},
-        result=(f"{error}; " if error else "")
-               + f"{len(recorder.tool_calls)} tool calls, {len(context.findings)} findings",
-        started_at=top_started, ended_at=recorder.elapsed(), error=error,
-    )
-    if retry:
+    # A Lead whose model failed before any research ran is retried once on the fallback model.
+    if not verdict.simple and run.model_failed and not context.rounds_used:
+        model = roster.model_name(config.FALLBACK_MODEL)
+        await _drop_unanswered(session, question)
+        run = await _run_top(research.lead_agent(config.FALLBACK_MODEL), question, session, recorder,
+                             context, False, max(15.0, context.research_left()))
+        _note_top(recorder, "Lead", question, False, context, run, retry_on=model)
+
+    response, timed_out, needs_writer = run.response, run.timed_out, not verdict.simple and not run.retry
+    if run.retry:
         retry_started = recorder.elapsed()
         response = await _retry_as_analyst(question, session, model_id, recorder, context)
         recorder.note(name="agent", agent="Analyst",
@@ -106,19 +84,79 @@ async def answer(question: str, session: Session | None, researcher_model: str) 
                       result="retried on the fast path after the Lead failed",
                       started_at=retry_started, ended_at=recorder.elapsed())
 
-    if needs_writer and (ended_normally or context.findings):
+    if needs_writer and (run.ended_normally or context.findings):
         response = await research.write_report_now(context.report_question or question, context)
         if session is not None and response:
             # The writer runs outside the Lead's run, so save its answer by hand for the next turn.
             await session.add_items([{"role": "assistant", "content": response}])
     if timed_out:
-        response = OVER_TIME + "\n\n" + response
+        response = OVER_TIME + "\n\n" + response if response else TIMED_OUT_EMPTY
 
     return {
         "response": response or (NOTHING_FOUND if not context.findings else EMPTY),
         "tool_calls": recorder.tool_calls,
         "charts": context.charts,
     }
+
+
+@dataclass
+class TopRun:
+    """How the Analyst's or the Lead's run ended."""
+
+    started_at: float
+    response: str = ""
+    error: str = ""
+    ended_normally: bool = False
+    timed_out: bool = False
+    model_failed: bool = False  # the model call itself failed, so another model may succeed
+    retry: bool = False  # the Lead reached for a data tool, so the Analyst should answer
+
+
+async def _run_top(agent, question: str, session: Session | None, recorder: ToolRecorder,
+                   context: RunContext, simple: bool, budget: float) -> TopRun:
+    """Run the Analyst or the Lead within `budget` seconds; failures are returned, not raised."""
+    run = TopRun(started_at=recorder.elapsed())
+    try:
+        result = await asyncio.wait_for(
+            Runner.run(agent, question, session=session, hooks=recorder, context=context,
+                       max_turns=config.MAX_TURNS if simple else config.LEAD_TURNS),
+            timeout=budget,
+        )
+        run.ended_normally = True
+        if simple:
+            run.response = _attest(str(result.final_output or "").strip(), recorder.tool_calls, question)
+    except MaxTurnsExceeded:
+        run.error, run.response = "ran out of turns", OUT_OF_TURNS  # findings are still written up
+    except ModelBehaviorError as e:
+        if simple:
+            run.error = type(e).__name__
+            run.response = f"The model call failed ({run.error}); the tool calls below show what was tried."
+        else:
+            # The Lead imitated a data tool from the session history; the analyst holds that tool.
+            run.retry, run.error = True, "called a tool it does not have; retried as the Analyst"
+    except asyncio.TimeoutError:
+        run.timed_out, run.error = True, "timed out"
+    except litellm.RateLimitError:
+        run.error, run.response, run.model_failed = "rate limited", RATE_LIMITED, True
+    except Exception as e:
+        # Any other model failure: findings already gathered are still written up.
+        run.error, run.model_failed = type(e).__name__, True
+        run.response = f"The model call failed ({run.error}); the tool calls below show what was tried."
+    return run
+
+
+def _note_top(recorder: ToolRecorder, name: str, question: str, simple: bool, context: RunContext,
+              run: TopRun, retry_on: str = "") -> None:
+    """One timeline row for the Analyst's or the Lead's run; red when it failed."""
+    args = {"question": question, "route": "fast path" if simple else "research path"}
+    if retry_on:
+        args.update(model=retry_on, retry=True)
+    recorder.note(
+        name="agent", agent=name, args=args,
+        result=(f"{run.error}; " if run.error else "")
+               + f"{len(recorder.tool_calls)} tool calls, {len(context.findings)} findings",
+        started_at=run.started_at, ended_at=recorder.elapsed(), error=run.error,
+    )
 
 
 @dataclass
@@ -222,6 +260,15 @@ async def _has_history(session: Session | None) -> bool:
         return False
 
 
+async def _drop_unanswered(session: Session | None, question: str) -> None:
+    """Remove the question a failed run saved, so its retry does not store it a second time."""
+    if session is None:
+        return
+    last = await session.get_items(limit=1)
+    if last and last[-1].get("role") == "user" and last[-1].get("content") == question:
+        await session.pop_item()
+
+
 async def _retry_as_analyst(question: str, session: Session | None, model_id: str,
                             recorder: ToolRecorder, context: RunContext) -> str:
     """Answer on the fast path after the Lead reached for a tool it does not have."""
@@ -229,7 +276,7 @@ async def _retry_as_analyst(question: str, session: Session | None, model_id: st
         result = await asyncio.wait_for(
             Runner.run(roster.analyst.clone(model=roster.model(model_id)), question,
                        session=session, hooks=recorder, context=context, max_turns=config.MAX_TURNS),
-            timeout=max(15.0, context.seconds_left()),
+            timeout=max(5.0, context.seconds_left()),
         )
         return _attest(str(result.final_output or "").strip(), recorder.tool_calls, question)
     except Exception:

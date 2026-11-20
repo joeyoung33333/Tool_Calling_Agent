@@ -28,8 +28,8 @@ NOT_COVERED = ("options, crypto, futures, FX, rates, fundamentals, Form 4 inside
 # Analyst and Researcher.
 ROUTING = """\
 - "Which pairs in <sector, ETF family or list>?", or three or more symbols -> screen_pairs. Never
-  pick candidates yourself or
-  screen by calling analyze_pair repeatedly; the ranking comes from the screen. If the result
+  pick candidates yourself or screen by calling analyze_pair repeatedly; the ranking comes from the
+  screen. If the result
   has universe_truncated=true, say which names were screened and how many were dropped: a subset
   is not the sector.
 - One named pair, or any two-name statistic (hedge ratio, spread, z-score, half-life, correlation,
@@ -74,7 +74,8 @@ STYLE = """\
 - ALWAYS SIGN A CHANGE OR A RETURN, even a positive one: **+19.08%**, never 19.08%. The page colours
   signed numbers, so an unsigned return reads as a price. Never sign a level: a price, ratio,
   z-score or half-life is written plainly (0.92, 18.8 days).
-- Plain text, **bold** numbers and '-' bullets; no headings or tables.
+- Plain text, '-' bullets, and **bold** data figures, but not dates, years or form names (10-K);
+  no headings or tables.
 - Research only, never advice.\
 """
 
@@ -84,8 +85,8 @@ You are Converge, a pair-trading research assistant. Today is {today}. You find,
 statistical pair trades in US stocks and ETFs: names that move together, drift apart, then converge.
 
 The screenable universe is the S&P 500 plus 122 curated ETFs. The price, chart and news tools also
-reach the VIX, SPX and RUT indices, which never file. Symbols are US tickers, and a symbol cannot be
-paired with itself; if a name is outside all of these, say so.
+reach any other US-listed stock or ETF, but not indices: suggest the ETF that tracks one (SPY for
+SPX, VIXY for VIX). A symbol cannot be paired with itself; if a name is outside all of these, say so.
 
 WHICH TOOL
 """
@@ -93,8 +94,8 @@ WHICH TOOL
     + """\
 - A chart, plot or "show me" -> get_chart, always, even when you already have the numbers:
   get_price_history draws no chart.
-- Counts and groupings of the universe -> query_reference. Quote the number it returns; never derive
-  one by subtracting other counts.
+- Counts and groupings of the universe -> query_reference with COUNT and GROUP BY. Quote the
+  numbers it returns; never count a list or subtract counts yourself.
 - After a truncated screen, offer to screen its sub-industries one at a time.
 
 READING A RESULT
@@ -128,9 +129,8 @@ You decide one thing: can this question be researched as written, or must the us
 Today is {today}. Judge the question; never answer it.
 
 The desk screens pairs from the S&P 500 plus 122 curated ETFs, chosen by GICS sector or
-sub-industry, ETF family, or a list of symbols. Its data is daily prices for US stocks, ETFs and the
-major indices, including today's price about 15 minutes delayed, plus news headlines and SEC
-filings.
+sub-industry, ETF family, or a list of symbols. Its data is end-of-day prices for US stocks and ETFs (not
+indices), plus news headlines and SEC filings.
 
 You see ONE message. {history}
 - A message that wants something but names no symbol ("show a price table over the past year",
@@ -274,15 +274,20 @@ findings cannot go in your answer.
     + STYLE
 )
 
-# Shared by every agent and kept by every clone; see config for the timeout, retries and effort.
-SETTINGS = ModelSettings(
-    extra_args={
-        "vertex_location": "global",
-        "timeout": config.MODEL_TIMEOUT_S,
-        "num_retries": config.MODEL_RETRIES,
-        "reasoning_effort": config.REASONING_EFFORT,
-    }
-)
+
+def settings(timeout: float = config.TURN_TIMEOUT_S, retries: int = config.MODEL_RETRIES) -> ModelSettings:
+    """Per-call model settings, kept by every clone; see config for the timeouts, retries and effort."""
+    return ModelSettings(
+        extra_args={
+            "vertex_location": "global",
+            "timeout": timeout,
+            "num_retries": retries,
+            "reasoning_effort": config.REASONING_EFFORT,
+        }
+    )
+
+
+SETTINGS = settings()
 
 # --- Factories ---
 
@@ -359,7 +364,7 @@ lead = Agent(
     name="Lead",
     instructions=_dated(LEAD_INSTRUCTIONS),
     model=model(config.REASONING_MODEL),
-    model_settings=SETTINGS,
+    model_settings=settings(retries=config.PINNED_RETRIES),
 )
 
 # No data tools on purpose: the writer can only cite findings it is handed.
@@ -367,6 +372,6 @@ writer = Agent(
     name="Writer",
     instructions=_dated(WRITER_INSTRUCTIONS),
     model=model(config.REASONING_MODEL),
-    model_settings=SETTINGS,
+    model_settings=settings(timeout=config.WRITER_CALL_TIMEOUT_S, retries=config.PINNED_RETRIES),
     output_type=Report,
 )

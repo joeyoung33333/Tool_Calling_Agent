@@ -800,14 +800,14 @@
             <div id="settings">
                 <label data-tip="Speed of the scrolling price tape. Off stops it; you can then scroll it by hand.">Tape <select id="tape-speed"></select></label>
                 <label class="left" data-tip="How often the background dots flash. Off stops them.">Twinkle <select id="twinkle"></select></label>
-                <label data-tip="Model for the Analyst (fast path) and the Researchers (research path).&#10;Default: Gemini 3.5 Flash-Lite, the fastest. The Flash models are stronger but slower.&#10;Pinned: the Clarifier, Lead and Writer always use Gemini 3.8 Flash.&#10;Every agent reasons at medium. Switch mid-chat and follow-ups keep their context.">Model <select id="model"></select></label>
+                <label data-tip="Model for the Analyst (fast path) and the Researchers (research path).&#10;Default: Gemini 3.5 Flash-Lite, the fastest. The Flash models are stronger but slower.&#10;Pinned: the Clarifier, Lead and Writer use Gemini 3.5 Flash; each retries on 3.5 Flash-Lite if its call fails (the Lead only before research starts).&#10;Every agent reasons at medium. Switch mid-chat and follow-ups keep their context.">Model <select id="model"></select></label>
             </div>
             <div id="messages"></div>
             <div id="input-area">
                 <input type="text" id="user-input" placeholder="Which pairs in the energy sector are viable? Is AMZN a good pair with NVDA?" autocomplete="off" />
                 <button class="solid" id="send-btn">Send</button>
             </div>
-            <footer>Research only, not investment advice. Prices ~15 min delayed (the last close when the market is shut); news and SEC filings same day.</footer>
+            <footer>Research only, not investment advice. Prices are end of day (the last completed session); news and SEC filings same day.</footer>
         </div>
         <!-- Plotly is self-hosted: a blocked CDN would mean no charts at all. -->
         <script src="__PLOTLY_SRC__"></script>
@@ -823,15 +823,15 @@
             const tape = document.getElementById("tape");
             let sessionId = null;
 
-            // [query, tags, blurb]. Energy and ETF-count match the README's sample queries.
+            // [query, tags, blurb]. The three research examples are the README's sample queries.
             const EXAMPLE_GROUPS = [
                 ["Research Path: Parallel Research Agents", [
                     ["Which pairs in the energy sector are viable pair trades?",
                      ["fans out \u2192 3-4 researchers", "screen_pairs", "holdout + deflated Sharpe",
                       "NEGATIVE result: nothing survives", "~2 min"],
-                     "The Lead splits the sector into briefs that researchers work at the same time. screen_pairs fits all 210 pairs in Python, ranks them on the earlier data, and backtests the best eight on data they were not chosen on. No pair clears its deflated Sharpe, so the answer is a well-evidenced \"no\". The Lead sometimes opens a second round on a gap the first one names."],
+                     "The Lead splits the sector, whole or by sub-industry, into briefs that researchers work at the same time. screen_pairs fits every pair in Python, ranks them on the earlier data, and backtests the best on data they were not chosen on. No pair clears its deflated Sharpe, so the answer is a well-evidenced \"no\"."],
                     ["Are these viable pair trades: AMZN vs GOOGL, MS vs JPM, WMT vs TGT, KO vs PEP, and SPY vs QQQ?",
-                     ["fans out by pair", "analyze_pair x5", "mixed verdicts", "~2 min"],
+                     ["fans out by pair", "analyze_pair x5", "mixed verdicts", "~1-2 min"],
                      "Five named pairs become separate briefs worked in parallel, one analyze_pair each. Expect a mix: AMZN/GOOGL promising but undeflated, MS/JPM and SPY/QQQ losing on the holdout, and WMT/TGT and KO/PEP rejected outright for a negative hedge ratio - the textbook pairs do not hold up on this window."],
                     ["Which energy pairs diverged the most, and what caused those divergences?",
                      ["fans out", "screen_pairs", "research_divergence", "news + filings", "~2 min"],
@@ -849,7 +849,7 @@
                      "An interactive closing-price chart. Drag across it to zoom, and the note underneath reports the move over the window you chose."],
                     ["How volatile has NVDA been over the past year?",
                      ["get_price_history", "month-end table"],
-                     "Annualized realized volatility, period return, high and low from Cboe daily bars, with a month-end price table."],
+                     "Annualized realized volatility, period return, high and low from Nasdaq daily bars, with a month-end price table."],
                     ["What news and SEC filings came out for TSLA this month?",
                      ["get_news", "get_filings"],
                      "Headlines plus 8-K item codes, 10-Ks and 10-Qs. An item code says what actually happened, which beats a headline."],
@@ -940,7 +940,7 @@
                     `Previous close ${money(row.prev_close)}`,
                     `Day range ${money(row.day_low)} - ${money(row.day_high)}`,
                     `52-week range ${money(row.year_low)} - ${money(row.year_high)}`,
-                    row.volume > 0 ? `Volume ${compact(row.volume)}` : "", // indices have no volume
+                    row.volume > 0 ? `Volume ${compact(row.volume)}` : "", // a missing volume is skipped
                 ].filter(Boolean).join("\n");
             }
 
@@ -962,7 +962,7 @@
                 ["QUESTION", "Which pairs of US stocks and ETFs <b>track each other, drift apart, then " +
                     "converge</b>? And when a pair stays apart, does the news explain why?"],
                 ["HOW", "Up to 40 names from <b>625 instruments</b> (the S&amp;P 500 plus 122 ETFs), with " +
-                    "three years of Cboe prices. Every pair is ranked on the <b>first 70%</b> and the best " +
+                    "three years of Nasdaq prices. Every pair is ranked on the <b>first 70%</b> and the best " +
                     "are backtested on the <b>last 30%</b>, after costs. SEC filings and news explain " +
                     "long divergences."],
                 ["FOR", "Analysts, finance students and traders who want the <b>evidence and its " +

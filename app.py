@@ -23,12 +23,11 @@ from sources import data, refdata
 
 # --- Config ---
 
-# Kept short: each symbol costs one rate-limited Cboe fetch at startup.
+# Kept short: each symbol costs one price-feed fetch at startup.
 TAPE_SYMBOLS = [
-    "SPY", "QQQ", "VIX", "NVDA", "MSFT", "AAPL", "GOOG", "AMZN",
+    "SPY", "QQQ", "NVDA", "MSFT", "AAPL", "GOOG", "AMZN",
     "META", "TSLA", "NFLX", "AMD", "PLTR", "JPM", "GS", "MS",
 ]
-INDEX_NAMES = {"VIX": "Cboe Volatility Index"}  # indices are not in the symbol directory
 
 # On Cloud Run this file is in memory, so history lasts only as long as the instance.
 SESSIONS_DB = "conversations.db"
@@ -57,13 +56,13 @@ def tape_row(symbol: str) -> dict | None:
         return None
     now = data.eastern_now()
     if bars and bars[-1]["date"] == now.strftime("%Y-%m-%d") and now.strftime("%H:%M") < "16:15":
-        bars = bars[:-1]  # today's bar is a live price until the 15-minute-delayed close prints
+        bars = bars[:-1]  # today's bar is not final until the close prints
     if len(bars) < 2:
         return None
     last, prev = bars[-1], bars[-2]
     try:
         # Reference table first: no network call.
-        name = INDEX_NAMES.get(symbol) or refdata.name_for(symbol) or data.company_name(symbol)
+        name = refdata.name_for(symbol) or data.company_name(symbol)
     except Exception:  # the name is a nicety
         name = None
     return {
@@ -82,7 +81,7 @@ def tape_row(symbol: str) -> dict | None:
 
 
 def refresh_tape() -> None:
-    """Quote every tape symbol once, at startup; no refresh, to spare the rate-limited feed."""
+    """Quote every tape symbol once, at startup; no refresh, to spare the price feed."""
     with ThreadPoolExecutor(5) as pool:
         tape["rows"] = [row for row in pool.map(tape_row, TAPE_SYMBOLS) if row]
 

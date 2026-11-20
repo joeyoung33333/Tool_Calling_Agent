@@ -195,22 +195,23 @@ async def research(wrapper: RunContextWrapper[RunContext], briefs: list[str]) ->
         briefs: Two to four self-contained research tasks, each one or two sentences.
     """
     ctx = wrapper.context
-    # A refusal is recorded as a failed step (ToolRecorder reads ctx.refused).
+    # A refusal is recorded as a failed step: ToolRecorder reads it back by this call's id.
+    call_id = getattr(wrapper, "tool_call_id", "")
     if ctx.rounds_used >= config.MAX_FANOUT_ROUNDS:
-        ctx.refused = "round limit reached"
+        ctx.refused[call_id] = "round limit reached"
         return OVER_ROUNDS.format(rounds=config.MAX_FANOUT_ROUNDS)
     if ctx.research_left() <= config.RESEARCHER_SALVAGE_S + config.MIN_RESEARCHER_S:
-        ctx.refused = "not enough time left to start a round"
+        ctx.refused[call_id] = "not enough time left to start a round"
         return OVER_BUDGET
 
     briefs = [b.strip() for b in briefs if b and b.strip()][: config.MAX_BRIEFS_PER_ROUND]
     if len(briefs) < 2:
-        ctx.refused = "fewer than two briefs"
+        ctx.refused[call_id] = "fewer than two briefs"
         return ("Send two to four self-contained briefs in one call: split the question by subject "
                 "so researchers can work on it at the same time.")
 
     if ctx.throttled():
-        ctx.refused = "rate limited"
+        ctx.refused[call_id] = "rate limited"
         return THROTTLED.format(n=ctx.rate_limited)
 
     # Taken before the await: concurrent research calls must not share round ids.
@@ -256,8 +257,12 @@ async def write_report_now(question: str, ctx: RunContext) -> str:
     fails the citation audit is rewritten once, and whatever still fails is marked."""
     if not ctx.findings:
         if not ctx.rounds_used:
-            return ("The research never started: planning the question used up the time budget "
-                    "before any researcher ran, so there is nothing to report. Please try again.")
+            if ctx.research_left() <= config.RESEARCHER_SALVAGE_S + config.MIN_RESEARCHER_S:
+                return ("The research never started: planning the question used up the time "
+                        "budget before any researcher ran, so there is nothing to report. Please "
+                        "try again.")
+            return ("No research was run for this question, so there is nothing to report. Try "
+                    "naming a sector, an ETF family or the symbols to compare.")
         return (
             "No researcher produced a usable finding for this question, so there is nothing to "
             "report. "
@@ -360,7 +365,7 @@ async def write_report(wrapper: RunContextWrapper[RunContext], question: str) ->
     return "The writer has the evidence and is writing the answer."
 
 
-def lead_agent() -> Agent:
-    """The Lead with its two tools, on the pinned model; the run stops at `write_report`."""
-    return roster.lead.clone(model=roster.model(config.REASONING_MODEL), tools=[research, write_report],
+def lead_agent(model_id: str = config.REASONING_MODEL) -> Agent:
+    """The Lead with its two tools; the run stops at `write_report`."""
+    return roster.lead.clone(model=roster.model(model_id), tools=[research, write_report],
                              tool_use_behavior=StopAtTools(stop_at_tool_names=["write_report"]))

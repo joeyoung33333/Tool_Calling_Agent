@@ -6,7 +6,7 @@
     {
       "name": "symbol",
       "type": "VARCHAR",
-      "description": "Cboe ticker, the spelling every price tool takes. E.g. 'NVDA', 'BRK.B'."
+      "description": "Exchange ticker, the spelling every price tool takes. E.g. 'NVDA', 'BRK.B'."
     },
     {
       "name": "sec_symbol",

@@ -143,14 +143,16 @@ def screen(
     rejected = [c for c in candidates if not c.get("tradeable")]
     no_reversion = [c for c in candidates if c.get("tradeable") and not _reverts(c)]
 
-    # Ranking used only in-sample data, so the trials to deflate for are just the pairs backtested.
+    # Ranking used only in-sample data, so the trials are the pairs backtested: never fewer than
+    # the default, so a smaller top_k cannot shrink the deduction.
     chosen = ranked[:k]
+    trials = max(len(chosen), min(config.TOP_K, len(ranked)))
     tested = []
     for candidate in chosen:
         try:
             result = backtest.evaluate(
                 series[candidate["a"]], series[candidate["b"]], rules=rules,
-                trials=len(chosen),
+                trials=trials,
             )
         except (ValueError, statistics.StatisticsError) as e:
             tested.append({**candidate, "backtest": {"tradeable": False, "reason": str(e)}})
@@ -163,7 +165,7 @@ def screen(
         "pairs_combinations": len(combos),
         "pairs_screened": len(candidates),
         "pairs_skipped_short_history": len(combos) - len(candidates),
-        "trials_considered": len(chosen),
+        "trials_considered": trials,
         "lookback_days": lookback,
         "top_k": k,
         "ranked": tested,
@@ -184,8 +186,9 @@ def screen(
             f"Every screening statistic, and therefore the ranking, is measured on the in-sample "
             f"window only, so the holdout is out of sample for the choice of pair as well as for the "
             f"parameters. Ranking is a weighted average of per-metric ranks "
-            f"({', '.join(name for name, v in config.SCREEN_WEIGHTS.items() if v > 0)}). The top {k} "
-            f"were then backtested on that holdout using in-sample parameters only."
+            f"({', '.join(name for name, v in config.SCREEN_WEIGHTS.items() if v > 0)}). "
+            + (f"The top {len(chosen)} were" if len(chosen) != 1 else "The top pair was")
+            + " then backtested on that holdout using in-sample parameters only."
         ),
     }
 
